@@ -307,8 +307,8 @@ def extract_limits_from_headers(
     lim: Dict[str, Any] = {}
 
     if provider == "groq":
+        # Заголовки Groq описують добовий ліміт запитів; ліміт на хвилину в них не передається
         lim = {
-            "rpm": 30,
             "rpd": g("x-ratelimit-limit-requests"),
             "tpm": g("x-ratelimit-limit-tokens"),
             "rpd_left": g("x-ratelimit-remaining-requests"),

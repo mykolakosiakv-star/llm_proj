@@ -202,9 +202,10 @@ def _record_response_headers_and_status(
             message=message[:240],
         )
         if headers:
-            lim = extract_limits_from_headers(headers)
+            lim = extract_limits_from_headers(get_model_config(model_id).get("provider", ""), headers)
             if lim.get("rpm") or lim.get("rpd"):
-                upsert_model_registry_entry({"id": model_id, "limits": lim})
+                sources = {k: "header" for k in ("rpm", "rpd", "tpm") if lim.get(k) is not None}
+                upsert_model_registry_entry({"id": model_id, "limits": {**lim, "limits_source": sources}})
 
 
 def _handle_http_failure(

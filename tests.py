@@ -1382,3 +1382,22 @@ def test_old_ok_status_is_marked_stale_in_snapshot(probe_models):
     upsert_model_status("custom:probe-fast", "ok", 200, 5, "", "2020-01-01 00:00:00")
     model = get_models_status_snapshot()["models"]["custom:probe-fast"]
     assert model["is_stale"] is True and model["check_kind"] == "ping"
+
+
+def test_groq_headers_do_not_invent_a_per_minute_limit():
+    from app.services.model_discovery import extract_limits_from_headers
+    limits = extract_limits_from_headers("groq", {"x-ratelimit-limit-requests": "14400", "x-ratelimit-limit-tokens": "6000"})
+    assert limits["rpd"] == 14400 and limits["tpm"] == 6000 and "rpm" not in limits
+
+
+def test_manual_limit_edit_is_not_overwritten_by_discovery():
+    from app.database import upsert_model_registry_entry, fetch_model_registry_by_id, delete_custom_model_from_registry
+    client = TestClient(app)
+    upsert_model_registry_entry({"id": "custom:limit-edit", "provider": "custom", "model_id": "limit-edit", "source": "custom",
+                                 "limits": {"rpm": 60, "limits_source": {"rpm": "catalog"}}})
+    assert client.put("/api/models/custom:limit-edit", json={"rpm": 5}).status_code == 200
+    # автопошук повторно приносить припущення каталогу
+    upsert_model_registry_entry({"id": "custom:limit-edit", "limits": {"rpm": 15, "limits_source": {"rpm": "catalog"}}})
+    limits = fetch_model_registry_by_id("custom:limit-edit")["limits"]
+    assert limits["rpm"] == 5 and limits["limits_source"]["rpm"] == "manual"
+    delete_custom_model_from_registry("custom:limit-edit")

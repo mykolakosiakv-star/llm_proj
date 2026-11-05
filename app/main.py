@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
             level="WARN",
         )
     if settings.get("probe_on_startup", True):
-        start_probe_task(only_enabled=True, force=True)
+        start_probe_task(only_enabled=True, force=False)
     yield
 
 
@@ -1142,6 +1142,8 @@ async def api_add_custom_model(payload: CustomModelCreateRequest):
         limits["rpm"] = payload.rpm
     if payload.rpd is not None:
         limits["rpd"] = payload.rpd
+    if limits:
+        limits["limits_source"] = {k: "manual" for k in limits}
 
     entry = upsert_model_registry_entry(
         {
@@ -1195,6 +1197,8 @@ async def api_update_model_registry(model_key: str, payload: ModelRegistryUpdate
         limits_patch["rpm"] = payload.rpm
     if payload.rpd is not None:
         limits_patch["rpd"] = payload.rpd
+    if limits_patch:
+        limits_patch["limits_source"] = {k: "manual" for k in limits_patch}
     has_price_edit = payload.input_price_per_1m is not None or payload.output_price_per_1m is not None
     patch_entry = {"id": model_key}
     if payload.enabled is not None:
@@ -1361,18 +1365,4 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
     }
 
 
-@app.get("/api/models/probe-limits")
-async def api_get_cached_probe():
-    """Повертає актуальний знімок статусів моделей."""
-    return get_models_status_snapshot()
 
-
-@app.post("/api/models/probe-limits")
-async def api_probe_model_limits(payload: Optional[RefreshStatusRequest] = Body(default=None)):
-    """Запускає оновлення статусів моделей (неблокуюче або для однієї моделі)."""
-    req = payload or RefreshStatusRequest()
-    return start_probe_task(
-        model_key=req.model_key,
-        only_enabled=req.only_enabled,
-        force=req.force,
-    )
