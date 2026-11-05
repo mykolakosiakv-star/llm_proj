@@ -1472,3 +1472,26 @@ def test_dataset_hash_is_cached_and_reset_by_query_edit():
     finally:
         upsert_query_item({**item, "user_query": original})
     assert compute_dataset_hash() == first
+
+
+def test_judge_result_is_cached_in_database_across_memory_resets():
+    from app.services import judge as judge_module
+    from app.database import fetch_judge_cache, store_judge_cache
+    store_judge_cache("judge:test:abc", "abc", "rubric", "model-x", {"evaluated": True, "rubric_composite_pct": 77.5})
+    assert fetch_judge_cache("judge:test:abc")["rubric_composite_pct"] == 77.5
+    assert fetch_judge_cache("judge:test:missing") is None
+    # після перезапуску пам'ять порожня, а результат береться з бази
+    judge_module._JUDGE_RESULT_CACHE.clear()
+    assert fetch_judge_cache("judge:test:abc")["evaluated"] is True
+
+
+def test_seed_does_not_overwrite_user_edits_to_existing_queries():
+    from app.database import fetch_all_queries, upsert_query_item
+    item = dict(fetch_all_queries()[0])
+    original = item["user_query"]
+    try:
+        upsert_query_item({**item, "user_query": original + " (правка користувача)"})
+        seed_database_if_needed()
+        assert next(q for q in fetch_all_queries() if q["code"] == item["code"])["user_query"].endswith("(правка користувача)")
+    finally:
+        upsert_query_item({**item, "user_query": original})

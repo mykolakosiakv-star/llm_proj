@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 from app.database import (
     get_connection,
+    fetch_all_queries,
     upsert_query_item,
     compute_template_hash,
     update_prompt_template,
@@ -873,12 +874,14 @@ def seed_database_if_needed() -> None:
     for p in to_upgrade:
         update_prompt_template(p)
 
+    # Лише відсутні запити: правки, внесені користувачем в інтерфейсі, не повинні скасовуватися при кожному запуску
+    existing_codes = {q["code"] for q in fetch_all_queries()}
     for q in TYPICAL_QUERIES_SEED:
-        q_item = dict(q)
-        q_item.setdefault("domain", "fintech")
-        upsert_query_item(q_item)
+        if q["code"] not in existing_codes:
+            upsert_query_item({**q, "domain": q.get("domain", "fintech")})
     for q in ADDITIONAL_DOMAIN_QUERIES:
-        upsert_query_item(q)
+        if q["code"] not in existing_codes:
+            upsert_query_item(q)
 
     total_seeded = len(TYPICAL_QUERIES_SEED) + len(ADDITIONAL_DOMAIN_QUERIES)
     log_event(

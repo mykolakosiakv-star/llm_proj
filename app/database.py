@@ -1062,6 +1062,29 @@ def delete_custom_model_from_registry(reg_id: str) -> bool:
         conn.close()
 
 
+def fetch_judge_cache(cache_key: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT response_json FROM judge_cache WHERE cache_key = ?", (cache_key,)).fetchone()
+    finally:
+        conn.close()
+    return json.loads(row["response_json"]) if row else None
+
+
+def store_judge_cache(cache_key: str, answer_hash: str, rubric_hash: str, judge_model: str, result: Dict[str, Any]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO judge_cache (cache_key, answer_hash, rubric_hash, judge_model, response_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cache_key, answer_hash, rubric_hash, judge_model,
+             json.dumps(result, ensure_ascii=False, default=str), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def upsert_provider_status(provider: str, report: Dict[str, Any], listed_at: str) -> None:
     extra = {k: v for k, v in report.items() if k in ("account", "configured")}
     conn = get_connection()

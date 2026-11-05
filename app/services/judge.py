@@ -22,6 +22,7 @@ from app.config import (
     load_runtime_settings,
     get_model_config,
 )
+from app.database import fetch_judge_cache, store_judge_cache
 from app.services.llm_runtime import execute_llm_request
 from app.services.logger import log_event
 
@@ -355,11 +356,12 @@ async def evaluate_with_rubric_judge(
         generated_answer=generated_answer,
     )
 
-    cache_key = f"{target_judge_id}:{prompts['judge_prompt_hash']}:{hashlib.sha256((generated_answer or '').encode('utf-8')).hexdigest()[:16]}"
-    if cache_key in _JUDGE_RESULT_CACHE:
-        cached_copy = dict(_JUDGE_RESULT_CACHE[cache_key])
-        cached_copy["from_cache"] = True
-        return cached_copy
+    answer_hash = hashlib.sha256((generated_answer or '').encode('utf-8')).hexdigest()[:16]
+    cache_key = f"{target_judge_id}:{prompts['judge_prompt_hash']}:{answer_hash}"
+    cached = _JUDGE_RESULT_CACHE.get(cache_key) or fetch_judge_cache(cache_key)
+    if cached:
+        _JUDGE_RESULT_CACHE[cache_key] = cached
+        return {**cached, "from_cache": True}
 
     attempt_configs = [
         {
@@ -499,6 +501,7 @@ async def evaluate_with_rubric_judge(
             "attempt_count": cfg["attempt"],
         }
         _JUDGE_RESULT_CACHE[cache_key] = dict(out_res)
+        store_judge_cache(cache_key, answer_hash, prompts["judge_prompt_hash"], target_judge_id, out_res)
         return out_res
 
     return {
