@@ -138,12 +138,7 @@ function renderDatasetTable() {
         return matchDom && matchCat;
     });
 
-    const domainLabels = {
-        fintech: 'Фінтех',
-        it_helpdesk: 'ІТ / SaaS',
-        ecommerce: 'E-Commerce',
-        telecom: 'Телеком',
-    };
+    const domainLabels = Object.fromEntries(Object.values(meta?.domains || {}).map(d => [d.id, d.short_uk || d.name_uk]));
 
     document.getElementById('datasetTableBody').innerHTML = filtered.map(q => {
         const catInfo = meta?.categories?.[q.category] || { name_uk: q.category };
@@ -163,6 +158,7 @@ function renderDatasetTable() {
                 <td class="py-2 px-2.5 font-medium text-slate-900">${escapeHtml(q.user_query)}</td>
                 <td class="py-2 px-2.5 text-slate-600">${escapeHtml(q.reference_answer)}</td>
                 <td class="py-2 px-2.5">${kwBadges}</td>
+                <td class="py-2 px-2.5 whitespace-nowrap">${q.review_status === 'draft' ? 'чернетка' : 'перевірено'}</td>
             </tr>
         `;
     }).join('');
@@ -227,5 +223,153 @@ async function submitImportQueriesJson() {
     } catch (e) {
         msg.className = 'p-2.5 rounded-lg font-semibold bg-rose-50 text-rose-800 border border-rose-200 block';
         msg.textContent = `Помилка розбору JSON: ${e.message}`;
+    }
+}
+
+
+function kbDomainOptions(withAll) {
+    const domains = Object.values(APP_STATE.metadata?.domains || {});
+    return (withAll ? '<option value="all">Усі сфери</option>' : '') +
+        domains.map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name_uk)}</option>`).join('');
+}
+
+function populateKbControls() {
+    const keep = id => document.getElementById(id)?.value;
+    const selections = { filter: keep('datasetDomainFilter'), drafts: keep('kbDraftsDomain'), gen: keep('kbGenDomain'), model: keep('kbGenModel') };
+    const fill = (id, html, value) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = html;
+        if (value && Array.from(el.options).some(o => o.value === value)) el.value = value;
+    };
+    fill('datasetDomainFilter', kbDomainOptions(true), selections.filter);
+    fill('kbDraftsDomain', kbDomainOptions(true), selections.drafts);
+    fill('kbGenDomain', kbDomainOptions(false), selections.gen);
+    const models = getEnabledModelsList().filter(m => m.status_code === 'ok');
+    fill('kbGenModel', models.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('')
+        || '<option value="">Немає працюючих моделей</option>', selections.model);
+}
+
+async function loadKbPanels() {
+    populateKbControls();
+    const summary = await fetch('/api/kb/summary').then(r => r.json()).catch(() => ({ items: [] }));
+    const rows = (summary.items || []).map(s => `<tr class="border-b border-slate-100">
+        <td class="py-2 pr-3">${escapeHtml(s.name_uk)}</td>
+        <td class="py-2 pr-3">${s.queries}</td>
+        <td class="py-2 pr-3">${s.queries_draft}</td>
+        <td class="py-2 pr-3">${s.paraphrases}</td>
+        <td class="py-2 pr-3">${s.documents}</td>
+        <td class="py-2 pr-3">${s.distractors}</td>
+        <td class="py-2 ${s.queries < 30 ? 'text-amber-800' : 'text-emerald-800'}">${s.queries < 30 ? `ще потрібно ${30 - s.queries}` : 'достатньо'}</td></tr>`).join('');
+    document.getElementById('kbSummary').innerHTML = `<table class="w-full text-sm text-left"><thead class="text-xs text-slate-500 border-b border-slate-200"><tr>
+        <th class="py-2 pr-3 font-medium">Сфера</th><th class="py-2 pr-3 font-medium">Перевірених запитів</th>
+        <th class="py-2 pr-3 font-medium">Чернеток запитів</th><th class="py-2 pr-3 font-medium">З них перефраз</th>
+        <th class="py-2 pr-3 font-medium">Фрагментів бази знань</th><th class="py-2 pr-3 font-medium">З них дистракторів</th>
+        <th class="py-2 font-medium">Для висновків</th></tr></thead><tbody>${rows}</tbody></table>`;
+    await loadKbDrafts();
+}
+
+async function loadKbDrafts() {
+    const domain = document.getElementById('kbDraftsDomain')?.value || 'all';
+    const box = document.getElementById('kbDrafts');
+    if (!box) return;
+    const data = await fetch(`/api/kb/drafts?domain=${encodeURIComponent(domain)}`).then(r => r.json()).catch(() => null);
+    if (!data) {
+        box.innerHTML = '<p class="text-sm text-slate-600">Не вдалося завантажити чернетки.</p>';
+        return;
+    }
+    const draftRow = (kind, key, label, text, sub) => `<div class="border border-slate-200 rounded-lg p-3 space-y-2">
+        <div class="text-xs text-slate-500">${escapeHtml(label)} <span class="font-mono">${escapeHtml(key)}</span>${sub ? `. ${escapeHtml(sub)}` : ''}</div>
+        <textarea rows="2" id="draft-${escapeHtml(key)}" class="w-full border border-slate-300 rounded-lg p-2 text-sm">${escapeHtml(text)}</textarea>
+        <div class="flex gap-2">
+            <button onclick="reviewKbDraft('${kind}', '${escapeHtml(key)}', 'approve')" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">Затвердити</button>
+            <button onclick="reviewKbDraft('${kind}', '${escapeHtml(key)}', 'reject')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-xs font-medium">Відхилити</button>
+        </div></div>`;
+    const items = [
+        ...data.queries.map(q => draftRow('query', q.code, q.variant_of ? 'Перефраз запиту' : 'Запит', q.user_query, q.variant_of ? `Оригінал ${q.variant_of}` : q.context_fact)),
+        ...data.documents.map(d => draftRow('document', d.doc_code, 'Фрагмент бази знань', d.text, d.title)),
+    ];
+    box.innerHTML = items.join('') || '<p class="text-sm text-slate-600">Чернеток на перевірку немає.</p>';
+}
+
+async function reviewKbDraft(kind, key, action) {
+    const text = action === 'approve' ? document.getElementById(`draft-${key}`)?.value || '' : '';
+    const resp = await fetch('/api/kb/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, key, action, text }),
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        alert(err.detail || 'Не вдалося зберегти рішення.');
+        return;
+    }
+    await refreshMetadataAndData();
+    await loadKbPanels();
+}
+
+function showKbMessage(id, text, isError) {
+    const el = document.getElementById(id);
+    el.className = `text-sm ${isError ? 'text-rose-800' : 'text-emerald-800'}`;
+    el.textContent = text;
+}
+
+function readFaqFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    document.getElementById('faqFormat').value = ext === 'json' ? 'json' : ext === 'csv' ? 'csv' : 'text';
+    const reader = new FileReader();
+    reader.onload = () => { document.getElementById('faqContent').value = reader.result; };
+    reader.readAsText(file, 'utf-8');
+}
+
+async function importFaq() {
+    const resp = await fetch('/api/kb/import-faq', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            domain_code: document.getElementById('faqDomainCode').value.trim(),
+            domain_name: document.getElementById('faqDomainName').value.trim(),
+            company: document.getElementById('faqCompany').value.trim(),
+            format: document.getElementById('faqFormat').value,
+            content: document.getElementById('faqContent').value,
+        }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+        showKbMessage('faqMessage', typeof data.detail === 'string' ? data.detail : 'Перевірте код сфери, назву й вміст.', true);
+        return;
+    }
+    showKbMessage('faqMessage', `Створено чернеток: ${data.imported}. Перевірте їх нижче.`, false);
+    await refreshMetadataAndData();
+    await loadKbPanels();
+}
+
+async function generateKbDrafts() {
+    const btn = document.getElementById('kbGenBtn');
+    btn.disabled = true;
+    btn.textContent = 'Модель працює...';
+    try {
+        const resp = await fetch('/api/kb/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                domain: document.getElementById('kbGenDomain').value,
+                kind: document.getElementById('kbGenKind').value,
+                count: Number(document.getElementById('kbGenCount').value) || 10,
+                model_id: document.getElementById('kbGenModel').value,
+            }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Не вдалося створити чернетки.');
+        showKbMessage('kbGenMessage', `Створено чернеток: ${data.created}. Перевірте їх вище.`, false);
+        await refreshMetadataAndData();
+        await loadKbPanels();
+    } catch (err) {
+        showKbMessage('kbGenMessage', err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Створити чернетки';
     }
 }

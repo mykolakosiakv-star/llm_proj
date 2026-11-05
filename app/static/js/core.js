@@ -99,6 +99,9 @@ function switchTab(tabId) {
     if (tabId === 'home') {
         renderHome();
     }
+    if (tabId === 'dataset') {
+        loadKbPanels();
+    }
 }
 
 let _wasBusyLastPoll = false;

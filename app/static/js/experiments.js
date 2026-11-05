@@ -20,6 +20,7 @@ function populateControls() {
     // Вибір типового запиту у пісочниці з фільтром за сферою
     populateSandboxQueryPresets();
     populateAssistantControls();
+    populateKbControls();
 
     // Вибір моделі (показуємо тільки увімкнені моделі) та промпту на вкладці пісочниці
     const modelSel = document.getElementById('sandboxModelSelect');

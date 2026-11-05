@@ -982,7 +982,93 @@
         </section>
 
         <!-- ВКЛАДКА: БАЗА І ПРОМПТИ -->
-        <section id="tab-dataset" class="hidden space-y-5">
+        <section id="tab-dataset" class="hidden space-y-6">
+            <div class="card-box p-5 space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-base">База знань і тестові запити</h2>
+                    <p class="text-sm text-slate-600">
+                        Для висновків за гіпотезами потрібно не менше 30 перевірених запитів у кожній сфері. Чернетки, створені моделлю або завантажені з FAQ, у серії не потрапляють, доки ви їх не затвердите.
+                    </p>
+                </div>
+                <div id="kbSummary" class="overflow-x-auto"></div>
+            </div>
+
+            <div class="card-box p-5 space-y-3">
+                <h2 class="font-semibold text-slate-900 text-base">Чернетки на перевірку</h2>
+                <p class="text-sm text-slate-600">Перевірте текст, за потреби виправте його й затвердіть. Відхилена чернетка видаляється.</p>
+                <div class="flex flex-wrap items-center gap-2 text-sm">
+                    <label for="kbDraftsDomain" class="text-slate-700">Сфера</label>
+                    <select id="kbDraftsDomain" onchange="loadKbDrafts()" class="border border-slate-300 rounded-lg px-3 py-1.5 bg-white"></select>
+                </div>
+                <div id="kbDrafts" class="space-y-3"></div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                <div class="card-box p-5 space-y-3">
+                    <h2 class="font-semibold text-slate-900 text-base">Додати сферу з FAQ</h2>
+                    <p class="text-sm text-slate-600">Завантажте пари «питання, відповідь». Програма створить сферу й чернетки запитів. Формати: JSON, CSV або текст.</p>
+                    <div id="faqMessage" class="hidden text-sm"></div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <label for="faqDomainCode" class="block text-xs font-medium text-slate-700 mb-1">Код сфери (латиницею)</label>
+                            <input id="faqDomainCode" type="text" placeholder="legal_support" class="w-full border border-slate-300 rounded-lg px-3 py-2">
+                        </div>
+                        <div>
+                            <label for="faqDomainName" class="block text-xs font-medium text-slate-700 mb-1">Назва сфери</label>
+                            <input id="faqDomainName" type="text" placeholder="Юридична підтримка" class="w-full border border-slate-300 rounded-lg px-3 py-2">
+                        </div>
+                        <div>
+                            <label for="faqCompany" class="block text-xs font-medium text-slate-700 mb-1">Назва компанії</label>
+                            <input id="faqCompany" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-2">
+                        </div>
+                        <div>
+                            <label for="faqFormat" class="block text-xs font-medium text-slate-700 mb-1">Формат</label>
+                            <select id="faqFormat" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white">
+                                <option value="text">Текст (питання й відповідь через порожній рядок)</option>
+                                <option value="csv">CSV (питання, відповідь)</option>
+                                <option value="json">JSON</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="faqFile" class="block text-xs font-medium text-slate-700 mb-1">Файл</label>
+                        <input id="faqFile" type="file" accept=".json,.csv,.txt" onchange="readFaqFile(event)" class="text-sm">
+                    </div>
+                    <textarea id="faqContent" rows="6" class="w-full border border-slate-300 rounded-lg p-3 text-sm" placeholder="Питання: Як змінити пароль?&#10;Відповідь: У налаштуваннях профілю оберіть «Змінити пароль»."></textarea>
+                    <button onclick="importFaq()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm">Створити чернетки</button>
+                </div>
+
+                <div class="card-box p-5 space-y-3">
+                    <h2 class="font-semibold text-slate-900 text-base">Розширити базу за допомогою моделі</h2>
+                    <p class="text-sm text-slate-600">
+                        Дистрактори потрібні, щоб пошук не знаходив відповідь надто легко: це сторонні фрагменти бази знань на суміжні теми. Перефрази перевіряють, чи не залежить пошук від точного формулювання. Результат потрапляє в чернетки.
+                    </p>
+                    <div id="kbGenMessage" class="hidden text-sm"></div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <label for="kbGenDomain" class="block text-xs font-medium text-slate-700 mb-1">Сфера</label>
+                            <select id="kbGenDomain" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"></select>
+                        </div>
+                        <div>
+                            <label for="kbGenKind" class="block text-xs font-medium text-slate-700 mb-1">Що створити</label>
+                            <select id="kbGenKind" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white">
+                                <option value="distractors">Дистрактори (сторонні фрагменти)</option>
+                                <option value="paraphrases">Розмовні перефрази запитів</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="kbGenCount" class="block text-xs font-medium text-slate-700 mb-1">Кількість (до 30)</label>
+                            <input id="kbGenCount" type="number" min="1" max="30" value="10" class="w-full border border-slate-300 rounded-lg px-3 py-2">
+                        </div>
+                        <div>
+                            <label for="kbGenModel" class="block text-xs font-medium text-slate-700 mb-1">Модель</label>
+                            <select id="kbGenModel" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"></select>
+                        </div>
+                    </div>
+                    <button onclick="generateKbDrafts()" id="kbGenBtn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm">Створити чернетки</button>
+                </div>
+            </div>
+
             <div class="card-box p-5 space-y-4">
                 <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
                     <div>
@@ -1000,20 +1086,15 @@
             <div class="card-box p-5 space-y-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                        <h2 class="font-bold text-slate-900 text-base">База типових запитів користувачів (Мульти-доменний довідник)</h2>
-                        <p class="text-xs text-slate-500">Еталонні запити, контекстні факти з бази знань та очікувана маршрутизація за 4 сферами</p>
+                        <h2 class="font-semibold text-slate-900 text-base">Усі тестові запити</h2>
+                        <p class="text-xs text-slate-500">Еталонні запити з очікуваним рішенням: відповісти самостійно чи передати оператору</p>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
-                        <select id="datasetDomainFilter" onchange="renderDatasetTable()" class="border border-blue-300 rounded-lg px-3 py-1.5 text-xs bg-blue-50/40 font-semibold text-slate-800">
-                            <option value="all">Усі сфери (108)</option>
-                            <option value="fintech">Фінтех / Банкінг (60)</option>
-                            <option value="it_helpdesk">ІТ / SaaS Helpdesk (16)</option>
-                            <option value="ecommerce">E-Commerce / Доставка (16)</option>
-                            <option value="telecom">Телеком / Зв'язок (16)</option>
-                        </select>
+                        <select id="datasetDomainFilter" onchange="renderDatasetTable()" class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white"></select>
                         <select id="datasetCategoryFilter" onchange="renderDatasetTable()" class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
                             <option value="all">Усі категорії</option>
                             <option value="informational">Інформаційні</option>
+                            <option value="navigational">Навігаційні</option>
                             <option value="procedural">Процедурні</option>
                             <option value="troubleshooting">Проблемні</option>
                             <option value="clarification">Уточнювальні</option>
@@ -1034,6 +1115,7 @@
                                 <th class="py-2 px-2.5">Запит користувача</th>
                                 <th class="py-2 px-2.5">Еталонна відповідь</th>
                                 <th class="py-2 px-2.5">Ключові факти</th>
+                                <th class="py-2 px-2.5">Статус</th>
                             </tr>
                         </thead>
                         <tbody id="datasetTableBody" class="divide-y divide-slate-200"></tbody>
