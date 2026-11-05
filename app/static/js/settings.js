@@ -316,9 +316,13 @@ function sampleSizeHintHtml(domain, categories, maxPerCategory, equalDomains) {
     return `<div class="mb-1.5 ${lacking.length ? 'text-amber-800' : 'text-emerald-800'}">${escapeHtml(summary)} ${escapeHtml(warning)}</div>`;
 }
 
+let _estimateRequestSeq = 0;
+
 async function updateBatchExperimentEstimate() {
     const box = document.getElementById('expEstimateContent');
     if (!box) return;
+    // Відповідь на давніший запит не повинна перезаписати новіший
+    const requestId = ++_estimateRequestSeq;
 
     const domain = document.getElementById('expDomainSelect')?.value || 'fintech';
     const modelIds = Array.from(document.querySelectorAll('input[name="expModel"]:checked')).map(el => el.value);
@@ -351,6 +355,7 @@ async function updateBatchExperimentEstimate() {
                 judge_model_id: judgeModelId,
             }),
         }).then(r => r.json());
+        if (requestId !== _estimateRequestSeq) return;
 
         const costText = res.has_unknown_price
             ? (res.est_total_cost_usd > 0 ? `$${res.est_total_cost_usd.toFixed(4)} + ціна не задана` : 'ціна не задана')

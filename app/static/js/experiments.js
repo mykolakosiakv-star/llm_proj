@@ -164,18 +164,18 @@ function populateControls() {
 const EXPERIMENT_PRESETS = {
     h1: {
         title: 'H1: залежність від сфери',
-        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], minModels: 2,
-        note: 'Усі сфери, однакова кількість запитів у кожній, пошук по базі знань. Потрібні щонайменше дві моделі.',
+        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], models: 3,
+        note: 'Усі сфери, однакова кількість запитів у кожній, пошук по базі знань. Взято до трьох моделей, що відповідають.',
     },
     h2: {
         title: 'H2: вплив промпту й контексту',
-        domain: null, prompts: ['P1', 'P3', 'P5'], contexts: ['no_context', 'retrieved_context', 'gold_context'], minModels: 2,
-        note: 'Одна сфера, три стратегії промпту, усі три режими контексту. Потрібні щонайменше дві моделі для порівняння.',
+        domain: null, prompts: ['P1', 'P3', 'P5'], contexts: ['no_context', 'retrieved_context', 'gold_context'], models: 2,
+        note: 'Одна сфера, три стратегії промпту, усі три режими контексту. Взято дві моделі, що відповідають.',
     },
     h3: {
         title: 'H3: чи досить дешевої моделі',
-        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], minModels: 2,
-        note: 'Усі сфери. Оберіть дешеву й сильнішу модель: для порівняння вартості в обох має бути задана ціна.',
+        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], models: 3,
+        note: 'Усі сфери. Бажано, щоб серед моделей були дешева й сильніша, і щоб для них була задана ціна. Змініть вибір моделей нижче.',
     },
 };
 
@@ -201,14 +201,12 @@ function applyExperimentPreset(code) {
     setCheckedByValue('expPrompt', preset.prompts);
     setCheckedByValue('expContextMode', preset.contexts);
 
-    const chosen = Array.from(document.querySelectorAll('input[name="expModel"]:checked'));
-    if (chosen.length < preset.minModels) {
-        const working = new Set((APP_STATE.metadata?.models || []).filter(m => m.status_code === 'ok').map(m => m.id));
-        document.querySelectorAll('input[name="expModel"]').forEach(el => {
-            const picked = document.querySelectorAll('input[name="expModel"]:checked').length;
-            if (!el.checked && picked < preset.minModels && working.has(el.value)) el.checked = true;
-        });
-    }
+    // Для порівняння потрібні кілька моделей, але не всі: зайві виклики коштують часу й денної квоти
+    const working = new Set((APP_STATE.metadata?.models || []).filter(m => m.status_code === 'ok').map(m => m.id));
+    const boxes = Array.from(document.querySelectorAll('input[name="expModel"]')).filter(el => working.has(el.value));
+    const preferred = boxes.filter(el => el.checked).concat(boxes.filter(el => !el.checked));
+    const picked = new Set(preferred.slice(0, preset.models).map(el => el.value));
+    document.querySelectorAll('input[name="expModel"]').forEach(el => { el.checked = picked.has(el.value); });
     document.getElementById('expPresetNote').textContent = preset.note;
     onExpDomainSelectChange();
     updateBatchExperimentEstimate();
