@@ -4,7 +4,9 @@
 - попереджає, якщо у сфері менше 30 запитів або є сильний перекіс між категоріями;
 - перевіряє, що кожен елемент required_keywords реально присутній у reference_answer
   за правилами нормалізації та морфологічної стемізації evaluator.compute_fact_coverage;
-- виявляє занадто загальні стоп-слова або однолітерні токени без смислового навантаження.
+- виявляє занадто загальні стоп-слова або однолітерні токени без смислового навантаження;
+- шукає повтори запитів і запити, що майже дослівно збігаються з фрагментом-відповіддю (пошук стане тривіальним);
+- рахує чернетки, що чекають на перевірку людиною: вони не потрапляють у серії.
 """
 
 from pathlib import Path
@@ -18,7 +20,11 @@ if str(ROOT) not in sys.path:
 from app.config import QUERY_CATEGORIES, DOMAIN_MIN_QUERIES_WARN
 from app.database import init_db, fetch_all_queries
 from app.seed_data import seed_database_if_needed
+from app.services.classifier import jaccard_stem_similarity, tokenize_uk
 from app.services.evaluator import compute_fact_coverage
+
+# Запит, що настільки збігається з відповіддю, робить перевірку пошуку безглуздою
+LEAK_SIMILARITY_THRESHOLD = 0.6
 
 TOO_GENERIC_STOPWORDS = {
     "та", "і", "й", "у", "в", "на", "до", "за", "із", "зі", "по",
@@ -115,9 +121,23 @@ def inspect_dataset_audit(queries: List[Dict[str, Any]] = None) -> Dict[str, Any
                 if v_clean in TOO_GENERIC_STOPWORDS or len(v_clean) < 1:
                     generic_warnings.append((code, v))
 
+    seen: Dict[tuple, List[str]] = {}
+    leaky_queries = []
+    for q in target_queries:
+        code = q.get("code") or ""
+        key = (q.get("domain") or "fintech", " ".join(tokenize_uk(q.get("user_query") or "")))
+        seen.setdefault(key, []).append(code)
+        if not q.get("variant_of"):
+            overlap = jaccard_stem_similarity(tokenize_uk(q.get("user_query") or ""), tokenize_uk(q.get("context_fact") or ""))
+            if overlap >= LEAK_SIMILARITY_THRESHOLD:
+                leaky_queries.append((code, round(overlap, 2)))
+    duplicates = [codes for codes in seen.values() if len(codes) > 1]
+
     return {
         "total": total,
         "perfect_100": perfect_100,
+        "duplicates": duplicates,
+        "leaky_queries": leaky_queries,
         "missing_in_ref": missing_in_ref,
         "generic_warnings": generic_warnings,
         "empty_kw_queries": empty_kw_queries,
@@ -141,7 +161,10 @@ def run_dataset_audit(queries: List[Dict[str, Any]] = None) -> int:
         for w in bal["warnings"]:
             print(f"  [WARN] {w}")
     else:
-        print("Баланс сфер і категорій: OK (>= 30 запитів у кожній сфері, без перекосів)")
+        print(f"Баланс сфер і категорій: OK (не менше {DOMAIN_MIN_QUERIES_WARN} запитів у кожній сфері, без перекосів)")
+    drafts = bal["by_review_status"].get("draft", 0)
+    if drafts:
+        print(f"Чернеток, що чекають на перевірку: {drafts}. У серії вони не потрапляють, доки не затверджені.")
 
     print(f"100% покриття фактів на еталонних відповідях: {res['perfect_100']} / {res['total']}")
 
@@ -154,13 +177,22 @@ def run_dataset_audit(queries: List[Dict[str, Any]] = None) -> int:
             print(f"  - {item['code']}: FC={item['coverage_pct']}%, пропущено={item['missing']}")
             print(f"    Еталон: {item['reference_answer']}")
 
+    if res["duplicates"]:
+        print(f"[ПОПЕРЕДЖЕННЯ] Повтори запитів: {res['duplicates']}")
+    if res["leaky_queries"]:
+        print(f"[ПОПЕРЕДЖЕННЯ] Запит майже збігається з фрагментом-відповіддю (пошук стане тривіальним): {res['leaky_queries']}")
+
     if res["generic_warnings"]:
         print(f"[ПОПЕРЕДЖЕННЯ] Надто загальні ключові слова: {res['generic_warnings']}")
 
-    if not res["missing_in_ref"] and not res["empty_kw_queries"]:
-        print("СТАТУС АУДИТУ: OK (усі еталонні відповіді дають 100.0% покриття фактів)")
-        return 0
-    return 1
+    if res["missing_in_ref"] or res["empty_kw_queries"]:
+        return 1
+    has_warnings = bool(bal["warnings"] or res["duplicates"] or res["leaky_queries"] or res["generic_warnings"])
+    if has_warnings:
+        print("СТАТУС АУДИТУ: помилок немає, але є попередження вище. Для висновків за гіпотезами їх треба усунути.")
+    else:
+        print("СТАТУС АУДИТУ: OK (еталони покривають усі факти, баланс і унікальність у нормі)")
+    return 0
 
 
 def main() -> int:

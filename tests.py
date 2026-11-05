@@ -1685,3 +1685,43 @@ def test_kb_endpoints_validate_input():
     assert client.post("/api/kb/review", json={"kind": "query", "key": "NOPE", "action": "explode"}).status_code == 400
     summary = client.get("/api/kb/summary").json()["items"]
     assert {s["domain"] for s in summary} >= {"fintech", "telecom"} and all("queries_draft" in s for s in summary)
+
+
+def test_proposed_balanced_queries_load_once_as_drafts_and_pass_the_audit():
+    from app.seed_data import load_proposed_drafts_once, PROPOSED_DRAFTS_FILE
+    from app.database import fetch_all_queries, get_connection
+    from scripts.audit_dataset import run_dataset_audit
+    # при імпорті модуля тестів початкове наповнення вже виконано, повторне завантаження нічого не додає
+    assert load_proposed_drafts_once() == 0
+    drafts = [q for q in fetch_all_queries() if q["source"] == "llm_draft" and q["review_status"] == "draft" and q["code"].split("-")[1] in ("NAV", "INF", "PRC", "TRB", "CLR")]
+    assert len(drafts) == 42
+    assert all(q["code"] not in {x["code"] for x in fetch_all_queries(reviewed_only=True)} for q in drafts)
+    # після відхилення чернетка не повертається: позначку про завантаження вже збережено
+    conn = get_connection()
+    conn.execute("DELETE FROM queries WHERE code = 'IT-NAV-01'")
+    conn.commit()
+    conn.close()
+    seed_database_if_needed()
+    assert "IT-NAV-01" not in {q["code"] for q in fetch_all_queries()}
+    # з чернетками, затвердженими людиною, кожна сфера має не менше 29 запитів (один видалено вище) і всі п'ять категорій
+    from collections import Counter
+    everything = fetch_all_queries()
+    per_domain = Counter(q["domain"] for q in everything)
+    assert all(per_domain[d] >= 29 for d in per_domain)
+    for domain in per_domain:
+        assert {q["category"] for q in everything if q["domain"] == domain} >= {"informational", "navigational", "procedural", "troubleshooting", "clarification"}
+    assert run_dataset_audit([{**q, "review_status": "reviewed"} for q in everything]) == 0
+
+
+def test_audit_flags_duplicates_and_queries_that_copy_their_answer():
+    from scripts.audit_dataset import inspect_dataset_audit
+    base = {"domain": "fintech", "category": "informational", "reference_answer": "Ліміт 500 грн на добу.", "required_keywords": ["500"],
+            "expected_escalation": False, "context_fact": "Добовий ліміт переказів становить 500 грн на добу для всіх карток.", "review_status": "reviewed"}
+    queries = [
+        {**base, "code": "A1", "user_query": "Який ліміт переказів на добу?"},
+        {**base, "code": "A2", "user_query": "який ліміт переказів на добу"},
+        {**base, "code": "A3", "user_query": "Добовий ліміт переказів становить 500 грн на добу для всіх карток"},
+    ]
+    result = inspect_dataset_audit(queries)
+    assert result["duplicates"] == [["A1", "A2"]]
+    assert [code for code, _ in result["leaky_queries"]] == ["A3"]

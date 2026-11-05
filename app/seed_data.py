@@ -3,8 +3,10 @@
 та 60 базових типових запитів фінансового домену.
 """
 
+import json
 from datetime import datetime
 from typing import List, Dict, Any
+from app.config import BASE_DIR
 from app.database import (
     get_connection,
     fetch_all_queries,
@@ -791,6 +793,34 @@ TYPICAL_QUERIES_SEED: List[Dict[str, Any]] = [
 ]
 
 
+PROPOSED_DRAFTS_FILE = BASE_DIR / "data" / "proposed" / "balanced_domain_queries_draft.json"
+
+
+def load_proposed_drafts_once() -> int:
+    """Завантажує запропоновані запити як чернетки один раз: відхилені людиною чернетки не повертаються при наступних запусках."""
+    marker = "balanced_domain_queries_v1"
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM seed_markers WHERE name = ?", (marker,)).fetchone() or not PROPOSED_DRAFTS_FILE.exists():
+            return 0
+    finally:
+        conn.close()
+    items = json.loads(PROPOSED_DRAFTS_FILE.read_text(encoding="utf-8"))
+    known = {q["code"] for q in fetch_all_queries()}
+    added = 0
+    for item in items:
+        if item["code"] not in known:
+            upsert_query_item({**item, "source": "llm_draft", "review_status": "draft"})
+            added += 1
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO seed_markers (name, applied_at) VALUES (?, ?)", (marker, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+    finally:
+        conn.close()
+    return added
+
+
 def seed_database_if_needed() -> None:
     from app.domain_datasets import DOMAIN_PROFILES, ADDITIONAL_DOMAIN_QUERIES
 
@@ -883,6 +913,7 @@ def seed_database_if_needed() -> None:
         if q["code"] not in existing_codes:
             upsert_query_item(q)
 
+    load_proposed_drafts_once()
     total_seeded = len(TYPICAL_QUERIES_SEED) + len(ADDITIONAL_DOMAIN_QUERIES)
     log_event(
         "ІНІЦІАЛІЗАЦІЯ",

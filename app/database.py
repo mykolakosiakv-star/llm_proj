@@ -442,6 +442,7 @@ def init_db() -> None:
         """
     )
     _ensure_column(cur, "experiment_runs", "corpus_version", "TEXT NOT NULL DEFAULT ''")
+    cur.execute("CREATE TABLE IF NOT EXISTS seed_markers (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_kb_chunks_domain ON kb_chunks(domain)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_kb_docs_domain_review ON kb_documents(domain, review_status)")
 
