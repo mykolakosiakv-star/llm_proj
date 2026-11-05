@@ -1,21 +1,13 @@
 @echo off
-chcp 65001 >nul
+rem Starts LLM-AutoBench at http://127.0.0.1:8000 (stop with Ctrl+C). Keep this file ASCII-only: cmd breaks on UTF-8 text.
 set PYTHONUTF8=1
-echo ============================================================================
-echo   Запуск програмно-дослідницького комплексу «LLM-AutoBench» v1.0
-echo   Тема: Дослідження ефективності застосування великих мовних моделей
-echo         для автоматизації відповідей на типові запити користувачів
-echo ============================================================================
-echo.
+cd /d "%~dp0"
 
 set "PY_EXE=%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe"
-if not exist "%PY_EXE%" (
-    set "PY_EXE=python"
-)
+if not exist "%PY_EXE%" set "PY_EXE=python"
 
-echo Використовується інтерпретатор: %PY_EXE%
-echo Відкрийте у браузері: http://127.0.0.1:8000
-echo.
-start "" http://127.0.0.1:8000
+echo LLM-AutoBench: http://127.0.0.1:8000
+echo Python: %PY_EXE%
+start "" cmd /c "timeout /t 4 >nul & start http://127.0.0.1:8000"
 "%PY_EXE%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 pause
