@@ -5,6 +5,7 @@
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+from functools import lru_cache
 import json
 import sqlite3
 from pathlib import Path
@@ -29,6 +30,7 @@ def compute_template_hash(system_template: str, user_template: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+@lru_cache(maxsize=1)
 def compute_code_version_hash() -> str:
     app_dir = BASE_DIR / "app"
     hasher = hashlib.sha256()
@@ -51,7 +53,13 @@ def compute_code_version_hash() -> str:
     return hasher.hexdigest()[:16]
 
 
+_DATASET_HASH_CACHE: Optional[str] = None
+
+
 def compute_dataset_hash() -> str:
+    global _DATASET_HASH_CACHE
+    if _DATASET_HASH_CACHE is not None:
+        return _DATASET_HASH_CACHE
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -64,7 +72,8 @@ def compute_dataset_hash() -> str:
     finally:
         conn.close()
     serialized = json.dumps(rows, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+    _DATASET_HASH_CACHE = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+    return _DATASET_HASH_CACHE
 
 
 def _ensure_column(cur: sqlite3.Cursor, table: str, column: str, col_def: str) -> None:
@@ -415,6 +424,7 @@ def init_db() -> None:
         """
     )
 
+    cur.execute("DELETE FROM evaluation_results WHERE run_id NOT IN (SELECT id FROM experiment_runs)")
     cur.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     # WAL дозволяє читати інтерфейсу, поки фонова серія пише результати; режим зберігається у файлі бази
@@ -545,6 +555,8 @@ def fetch_query_by_id(query_id: int) -> Optional[Dict[str, Any]]:
 
 
 def upsert_query_item(data: Dict[str, Any]) -> Dict[str, Any]:
+    global _DATASET_HASH_CACHE
+    _DATASET_HASH_CACHE = None
     """Додає новий або оновлює існуючий типовий запит за його кодом."""
     conn = get_connection()
     cur = conn.cursor()
@@ -788,9 +800,6 @@ def ensure_sandbox_run_id() -> int:
     return run_id
 
 
-_QUOTA_PAUSED_RUNS: Dict[int, Dict[str, Any]] = {}
-
-
 def pause_active_runs_for_quota(model_id: str, message: str, resume_after: Optional[str] = None) -> List[int]:
     """Переводить активні серії експериментів у статус paused_quota при вичерпанні денного ліміту."""
     conn = get_connection()
@@ -810,7 +819,6 @@ def pause_active_runs_for_quota(model_id: str, message: str, resume_after: Optio
             summary["quota_model_id"] = model_id
             summary["quota_message"] = message
             summary["resume_after"] = resume_after or "після оновлення добової квоти (Gemini: опівночі за тихоокеанським часом, інші: 00:00 UTC)"
-            _QUOTA_PAUSED_RUNS[run_id] = dict(summary)
             cur.execute(
                 "UPDATE experiment_runs SET status = 'paused_quota', summary_json = ? WHERE id = ?",
                 (json.dumps(summary, ensure_ascii=False), run_id),
@@ -821,49 +829,35 @@ def pause_active_runs_for_quota(model_id: str, message: str, resume_after: Optio
     return paused_ids
 
 
-def renumber_experiment_runs() -> Dict[int, int]:
-    """
-    Синхронізує лічильник completed_items та коректні статуси серій експериментів,
-    зберігаючи paused_quota, incomplete, failed та cancelled запуски.
-    """
+KNOWN_RUN_STATUSES = ("running", "completed", "incomplete", "failed", "cancelled", "paused_quota")
+
+
+def sync_run_counters() -> int:
+    """Приводить лічильники й статуси серій у відповідність до фактично збережених замірів. Повертає кількість серій."""
     conn = get_connection()
-    cur = conn.cursor()
-    id_map: Dict[int, int] = {}
     try:
-        cur.execute("DELETE FROM evaluation_results WHERE run_id NOT IN (SELECT id FROM experiment_runs)")
-        cur.execute("SELECT id, total_items, status, execution_mode, summary_json FROM experiment_runs ORDER BY id ASC")
-        rows = cur.fetchall()
-        for idx, r in enumerate(rows, start=1):
-            run_id = r["id"]
-            id_map[run_id] = idx
-            cur.execute("SELECT COUNT(*) AS cnt FROM evaluation_results WHERE run_id = ?", (run_id,))
-            cnt = int(cur.fetchone()["cnt"])
-            cur.execute("UPDATE experiment_runs SET completed_items = ? WHERE id = ?", (cnt, run_id))
-
-            if r["execution_mode"] != "sandbox":
-                tot = int(r["total_items"] or 0)
-                st = r["status"]
-                if run_id in _QUOTA_PAUSED_RUNS and (tot == 0 or cnt < tot):
-                    q_info = _QUOTA_PAUSED_RUNS.pop(run_id, {})
-                    try:
-                        cur_sum = json.loads(r["summary_json"] or "{}")
-                    except Exception:
-                        cur_sum = {}
-                    cur_sum.update(q_info)
-                    cur.execute(
-                        "UPDATE experiment_runs SET status = 'paused_quota', summary_json = ? WHERE id = ?",
-                        (json.dumps(cur_sum, ensure_ascii=False), run_id),
-                    )
-                elif st == "completed" and tot > 0 and cnt < tot:
-                    cur.execute("UPDATE experiment_runs SET status = 'incomplete' WHERE id = ?", (run_id,))
-                elif st == "paused_quota" and tot > 0 and cnt >= tot:
-                    cur.execute("UPDATE experiment_runs SET status = 'completed' WHERE id = ?", (run_id,))
-                elif st not in ("running", "completed", "incomplete", "failed", "cancelled", "paused_quota"):
-                    new_st = "completed" if (tot > 0 and cnt == tot) else ("incomplete" if cnt > 0 else "failed")
-                    cur.execute("UPDATE experiment_runs SET status = ? WHERE id = ?", (new_st, run_id))
-
+        conn.execute(
+            "UPDATE experiment_runs SET completed_items = "
+            "(SELECT COUNT(*) FROM evaluation_results WHERE run_id = experiment_runs.id)"
+        )
+        conn.execute(
+            "UPDATE experiment_runs SET status = 'incomplete' WHERE execution_mode != 'sandbox' "
+            "AND status = 'completed' AND total_items > 0 AND completed_items < total_items"
+        )
+        conn.execute(
+            "UPDATE experiment_runs SET status = 'completed' WHERE execution_mode != 'sandbox' "
+            "AND status = 'paused_quota' AND total_items > 0 AND completed_items >= total_items"
+        )
+        placeholders = ",".join("?" for _ in KNOWN_RUN_STATUSES)
+        conn.execute(
+            "UPDATE experiment_runs SET status = CASE "
+            "WHEN total_items > 0 AND completed_items = total_items THEN 'completed' "
+            "WHEN completed_items > 0 THEN 'incomplete' ELSE 'failed' END "
+            f"WHERE execution_mode != 'sandbox' AND status NOT IN ({placeholders})",
+            KNOWN_RUN_STATUSES,
+        )
         conn.commit()
-        return id_map
+        return int(conn.execute("SELECT COUNT(*) FROM experiment_runs WHERE execution_mode != 'sandbox'").fetchone()[0])
     finally:
         conn.close()
 

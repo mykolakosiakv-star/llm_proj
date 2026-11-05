@@ -1429,3 +1429,46 @@ def test_database_pragmas_indexes_and_schema_version():
         assert "idx_queries_domain_category" in plan
     finally:
         conn.close()
+
+
+def test_sync_run_counters_keeps_pauses_and_repairs_statuses():
+    from app.database import sync_run_counters, get_connection
+
+    def add_run(status, completed, total, mode="live_api"):
+        conn = get_connection()
+        cur = conn.execute(
+            "INSERT INTO experiment_runs (created_at, title, description, models_json, prompts_json, categories_json, "
+            "total_items, completed_items, status, execution_mode, summary_json) "
+            "VALUES ('2026-11-05 12:00:00', 'sync-test', '', '[]', '[]', '[]', ?, ?, ?, ?, '{}')",
+            (total, completed, status, mode),
+        )
+        conn.commit()
+        run_id = cur.lastrowid
+        conn.close()
+        return run_id
+
+    paused, finished, odd, sandbox = add_run("paused_quota", 7, 10), add_run("completed", 5, 5), add_run("weird", 0, 4), add_run("weird", 0, 4, "sandbox")
+    sync_run_counters()
+    conn = get_connection()
+    rows = {r["id"]: dict(r) for r in conn.execute("SELECT id, status, completed_items FROM experiment_runs WHERE id IN (?, ?, ?, ?)", (paused, finished, odd, sandbox))}
+    conn.execute("DELETE FROM experiment_runs WHERE id IN (?, ?, ?, ?)", (paused, finished, odd, sandbox))
+    conn.commit()
+    conn.close()
+    assert rows[paused]["status"] == "paused_quota" and rows[paused]["completed_items"] == 0   # пауза не губиться
+    assert rows[finished]["status"] == "incomplete"                                            # заявлено 5, фактично 0
+    assert rows[odd]["status"] == "failed"
+    assert rows[sandbox]["status"] == "weird"                                                  # службова серія не чіпається
+
+
+def test_dataset_hash_is_cached_and_reset_by_query_edit():
+    from app.database import compute_dataset_hash, fetch_all_queries, upsert_query_item
+    first = compute_dataset_hash()
+    assert compute_dataset_hash() == first
+    item = dict(fetch_all_queries()[0])
+    original = item["user_query"]
+    try:
+        upsert_query_item({**item, "user_query": original + " (змінено)"})
+        assert compute_dataset_hash() != first
+    finally:
+        upsert_query_item({**item, "user_query": original})
+    assert compute_dataset_hash() == first

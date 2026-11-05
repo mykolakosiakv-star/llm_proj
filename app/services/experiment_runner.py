@@ -25,7 +25,7 @@ from app.config import (
 from app.database import (
     get_connection,
     fetch_all_queries,
-    renumber_experiment_runs,
+    sync_run_counters,
     compute_code_version_hash,
     compute_dataset_hash,
     log_run_error,
@@ -731,7 +731,7 @@ def _create_batch_run_record(
     ds_hash = compute_dataset_hash()
     ctx_mode_col = ",".join(modes)
 
-    renumber_experiment_runs()
+    sync_run_counters()
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(

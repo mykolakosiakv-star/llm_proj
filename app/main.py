@@ -44,7 +44,7 @@ from app.database import (
     upsert_query_item,
     fetch_all_prompts,
     update_prompt_template,
-    renumber_experiment_runs,
+    sync_run_counters,
     fetch_run_errors,
     compute_code_version_hash,
     compute_dataset_hash,
@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
     init_db()
     await asyncio.to_thread(seed_database_if_needed)
     sync_model_registry_from_env()
-    renumber_experiment_runs()
+    sync_run_counters()
     settings = load_runtime_settings()
     configured = [
         name
@@ -628,7 +628,6 @@ async def api_cascade_simulate(payload: CascadeRequest):
 
 @app.get("/api/experiments")
 async def api_list_experiments():
-    renumber_experiment_runs()
     conn = get_connection()
     cur = conn.cursor()
     if not (get_logs_and_status().get("status") or {}).get("is_busy"):
@@ -1056,13 +1055,13 @@ async def api_delete_experiment(run_id: int):
     cur.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
     conn.commit()
     conn.close()
-    id_map = renumber_experiment_runs()
+    remaining = sync_run_counters()
     log_event(
         "ЖУРНАЛ",
-        f"Видалено серію експериментів №{run_id}. Нумерацію серій впорядковано (всього активних серій: {len(id_map)}).",
+        f"Видалено серію експериментів №{run_id}. Нумерацію серій впорядковано (всього активних серій: {remaining}).",
         level="WARN",
     )
-    return {"status": "deleted", "run_id": run_id, "remaining_runs": len(id_map)}
+    return {"status": "deleted", "run_id": run_id, "remaining_runs": remaining}
 
 
 @app.put("/api/settings")
