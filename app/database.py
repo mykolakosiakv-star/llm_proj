@@ -358,6 +358,22 @@ def init_db() -> None:
         """
     )
 
+    _ensure_column(cur, "model_status", "check_kind", "TEXT NOT NULL DEFAULT 'ping'")
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_status (
+            provider TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'unchecked',
+            http_status INTEGER DEFAULT NULL,
+            latency_ms INTEGER DEFAULT NULL,
+            models_count INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            extra_json TEXT NOT NULL DEFAULT '{}',
+            listed_at TEXT DEFAULT NULL
+        )
+        """
+    )
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS model_daily_usage (
@@ -870,6 +886,29 @@ def fetch_model_registry_by_id(reg_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+LIMIT_SOURCE_RANK = {"catalog": 1, "header": 2, "manual": 3}
+
+
+def _merge_limits(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    """Ліміти мають пріоритет за джерелом: вручну, потім із заголовків відповіді, потім припущення каталогу.
+
+    Автопошук моделей надсилає припущення каталогу й не повинен затирати значення, які вже уточнені точніше.
+    """
+    merged = {**existing, **{k: v for k, v in new.items() if v is not None and k != "limits_source"}}
+    ex_src = dict(existing.get("limits_source") or {})
+    new_src = new.get("limits_source") or {}
+    for key in ("rpm", "rpd", "tpm"):
+        if new.get(key) is None:
+            continue
+        incoming = new_src.get(key, "catalog")
+        if LIMIT_SOURCE_RANK.get(incoming, 1) >= LIMIT_SOURCE_RANK.get(ex_src.get(key, "catalog"), 1):
+            ex_src[key] = incoming
+        elif existing.get(key) is not None:
+            merged[key] = existing[key]
+    merged["limits_source"] = ex_src
+    return merged
+
+
 def upsert_model_registry_entry(entry: Dict[str, Any], preserve_user_fields: bool = True) -> Dict[str, Any]:
     conn = get_connection()
     cur = conn.cursor()
@@ -938,7 +977,7 @@ def upsert_model_registry_entry(entry: Dict[str, Any], preserve_user_fields: boo
                 new_lim = json.loads(limits_json or "{}")
             except Exception:
                 new_lim = {}
-            merged_lim = {**ex_lim, **{k: v for k, v in new_lim.items() if v is not None}}
+            merged_lim = _merge_limits(ex_lim, new_lim)
 
             cur.execute(
                 """
@@ -1011,6 +1050,45 @@ def delete_custom_model_from_registry(reg_id: str) -> bool:
         conn.close()
 
 
+def upsert_provider_status(provider: str, report: Dict[str, Any], listed_at: str) -> None:
+    extra = {k: v for k, v in report.items() if k in ("account", "configured")}
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO provider_status (provider, status, http_status, latency_ms, models_count, error, extra_json, listed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider) DO UPDATE SET
+                status = excluded.status, http_status = excluded.http_status, latency_ms = excluded.latency_ms,
+                models_count = excluded.models_count, error = excluded.error,
+                extra_json = excluded.extra_json, listed_at = excluded.listed_at
+            """,
+            (
+                provider, str(report.get("status") or "unchecked"), report.get("http_status"), report.get("latency_ms"),
+                int(report.get("models_total") or 0), str(report.get("error") or "")[:400],
+                json.dumps(extra, ensure_ascii=False, default=str), listed_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fetch_all_provider_statuses() -> Dict[str, Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM provider_status").fetchall()
+    finally:
+        conn.close()
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        d = dict(r)
+        d["checked_at"] = d.pop("listed_at")
+        d.update(json.loads(d.pop("extra_json") or "{}"))
+        out[d["provider"]] = d
+    return out
+
+
 def fetch_all_model_statuses() -> Dict[str, Dict[str, Any]]:
     conn = get_connection()
     cur = conn.cursor()
@@ -1034,23 +1112,26 @@ def upsert_model_status(
     latency_ms: Optional[int] = None,
     message: str = "",
     checked_at: Optional[str] = None,
+    check_kind: str = "ping",
 ) -> None:
+    """check_kind: ping (перевірено запитом), list (за списком провайдера), provider (успадковано від провайдера)."""
     conn = get_connection()
     cur = conn.cursor()
     ts = checked_at if checked_at is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         cur.execute(
             """
-            INSERT INTO model_status (model_key, status, http_code, latency_ms, message, checked_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO model_status (model_key, status, http_code, latency_ms, message, checked_at, check_kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(model_key) DO UPDATE SET
                 status = excluded.status,
                 http_code = excluded.http_code,
                 latency_ms = excluded.latency_ms,
                 message = excluded.message,
-                checked_at = excluded.checked_at
+                checked_at = excluded.checked_at,
+                check_kind = excluded.check_kind
             """,
-            (str(model_key), str(status), http_code, latency_ms, str(message or "")[:400], ts),
+            (str(model_key), str(status), http_code, latency_ms, str(message or "")[:400], ts, check_kind),
         )
         conn.commit()
     finally:

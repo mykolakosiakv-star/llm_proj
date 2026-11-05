@@ -1280,3 +1280,105 @@ def test_models_snapshot_uses_field_names_the_interface_reads():
     assert "checked_ago_uk" in provider and "models_count" in provider
     model = next(iter(snap["models"].values()))
     assert "checked_ago_uk" in model
+
+
+def test_limits_keep_the_most_reliable_source():
+    from app.database import _merge_limits
+    learned = {"rpm": 10, "rpd": 20, "limits_source": {"rpm": "header", "rpd": "manual"}}
+    guess = {"rpm": 15, "rpd": 1500, "tpm": 1000, "limits_source": {"rpm": "catalog", "rpd": "catalog", "tpm": "catalog"}}
+    merged = _merge_limits(learned, guess)
+    assert merged["rpm"] == 10 and merged["rpd"] == 20       # припущення каталогу не затирає уточнене
+    assert merged["tpm"] == 1000                              # нового значення раніше не було
+    assert merged["limits_source"]["rpm"] == "header" and merged["limits_source"]["rpd"] == "manual"
+    # вручну змінене значення перекриває значення із заголовків
+    manual = _merge_limits(merged, {"rpm": 5, "limits_source": {"rpm": "manual"}})
+    assert manual["rpm"] == 5 and manual["limits_source"]["rpm"] == "manual"
+    # записи без позначки джерела поводяться як раніше: нове значення замінює старе
+    assert _merge_limits({"rpm": 1}, {"rpm": 2})["rpm"] == 2
+
+
+def test_provider_status_survives_in_database_and_model_status_keeps_check_kind():
+    from app.database import upsert_provider_status, fetch_all_provider_statuses, upsert_model_status, fetch_all_model_statuses
+    upsert_provider_status("gemini", {"status": "ok", "models_total": 7, "http_status": 200, "latency_ms": 120, "account": {"x": 1}}, "2026-11-05 10:00:00")
+    stored = fetch_all_provider_statuses()["gemini"]
+    assert stored["status"] == "ok" and stored["models_count"] == 7 and stored["checked_at"] == "2026-11-05 10:00:00"
+    upsert_model_status("custom:kind-test", "ok", 200, 10, "", None, check_kind="list")
+    assert fetch_all_model_statuses()["custom:kind-test"]["check_kind"] == "list"
+
+
+@pytest.fixture
+def probe_models():
+    from app.database import upsert_model_registry_entry, delete_custom_model_from_registry
+    ids = ["custom:probe-fast", "custom:probe-slow"]
+    for mid in ids:
+        upsert_model_registry_entry({"id": mid, "provider": "custom", "model_id": mid.split(":")[1], "source": "custom",
+                                     "enabled": True, "base_url": "http://localhost:9/v1"})
+    yield ids
+    for mid in ids:
+        delete_custom_model_from_registry(mid)
+
+
+def test_failed_provider_listing_does_not_mark_models_missing():
+    from app.services import model_discovery as md
+    from app.database import upsert_model_registry_entry, fetch_all_model_statuses, get_connection
+    upsert_model_registry_entry({"id": "groq:listing-probe", "provider": "groq", "model_id": "listing-probe", "source": "discovered", "enabled": False})
+    md._PROVIDER_SUMMARY_CACHE["groq"] = {"status": "rate_limited", "error": "limit"}
+    md._mark_inherited_statuses({"groq": {}}, set(), "2026-11-05 10:00:00")          # список не отримано
+    assert fetch_all_model_statuses().get("groq:listing-probe", {}).get("status") != "model_missing"
+    md._PROVIDER_SUMMARY_CACHE["groq"] = {"status": "ok"}
+    md._mark_inherited_statuses({"groq": {"other-model": {}}}, {"groq"}, "2026-11-05 10:00:00")
+    status = fetch_all_model_statuses()["groq:listing-probe"]
+    assert status["status"] == "model_missing" and status["check_kind"] == "list"
+    conn = get_connection()
+    conn.execute("DELETE FROM model_registry WHERE id = 'groq:listing-probe'")
+    conn.commit()
+    conn.close()
+
+
+def test_model_checks_are_independent_counted_and_report_progress(probe_models):
+    from app.services import model_discovery as md
+    from app.database import fetch_all_model_registry, fetch_all_model_statuses, get_daily_usage_count
+
+    async def fake_ping(client, provider, api_model_name, api_key, base_url):
+        if api_model_name == "probe-slow":
+            await asyncio.sleep(5)
+        return "ok", 200, 10, "", {"rpm": 7}
+
+    targets = [r for r in fetch_all_model_registry() if r["id"] in probe_models]
+    progress = {}
+    with patch.object(md, "_ping_single_model", new=fake_ping), patch.object(md, "PING_TIMEOUT_SECONDS", 0.3):
+        asyncio.run(md._check_models(None, targets, {}, {}, {}, set(), "2026-11-05 10:00:00", progress))
+    assert progress["done"] == 2 and progress["total"] == 2
+    statuses = fetch_all_model_statuses()
+    assert statuses["custom:probe-fast"]["status"] == "ok" and statuses["custom:probe-fast"]["check_kind"] == "ping"
+    assert statuses["custom:probe-slow"]["status"] == "offline" and "очікування" in statuses["custom:probe-slow"]["message"]
+    assert get_daily_usage_count("custom:probe-fast") == 1
+    learned = next(r for r in fetch_all_model_registry() if r["id"] == "custom:probe-fast")["limits"]
+    assert learned["rpm"] == 7 and learned["limits_source"]["rpm"] == "header"
+
+
+def test_second_refresh_request_is_queued_and_pings_pause_during_experiment(probe_models):
+    from app.services import model_discovery as md
+    md._PROBE_JOB.update(running=True)
+    try:
+        result = md.start_probe_task()
+        assert result["queued"] is True and md._PROBE_JOB["queued"]
+        assert md.get_models_status_snapshot()["probe"]["queued"] is True
+    finally:
+        md._PROBE_JOB.pop("queued", None)
+        md._PROBE_JOB.update(running=False)
+
+    for busy, expect_targets in ((True, False), (False, True)):
+        with patch.object(md, "_listing_is_fresh", return_value=True), \
+             patch.object(md, "_experiment_is_running", return_value=busy), \
+             patch.object(md, "_check_models", new=AsyncMock()) as check:
+            asyncio.run(md.probe_all_providers(force=False))
+        assert bool(check.call_args.args[1]) is expect_targets
+
+
+def test_old_ok_status_is_marked_stale_in_snapshot(probe_models):
+    from app.services.model_discovery import get_models_status_snapshot
+    from app.database import upsert_model_status
+    upsert_model_status("custom:probe-fast", "ok", 200, 5, "", "2020-01-01 00:00:00")
+    model = get_models_status_snapshot()["models"]["custom:probe-fast"]
+    assert model["is_stale"] is True and model["check_kind"] == "ping"

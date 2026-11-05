@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from app.config import (
-    DATA_DIR,
     DEFAULT_MODELS_CATALOG,
     OPENROUTER_FREE_RPM_DOCS,
     PROVIDERS_CATALOG,
@@ -26,14 +25,20 @@ from app.config import (
 from app.database import (
     fetch_all_model_registry,
     fetch_all_model_statuses,
+    fetch_all_provider_statuses,
     get_daily_usage_count,
+    increment_daily_usage_count,
     upsert_model_registry_entry,
     upsert_model_status,
+    upsert_provider_status,
 )
-from app.services.logger import log_event
+from app.services.logger import get_logs_and_status, log_event
 
-PROBE_CACHE_FILE = DATA_DIR / "provider_probe.json"
-DISCOVERY_TTL_SECONDS = 180
+DISCOVERY_TTL_SECONDS = 6 * 3600
+STALE_STATUS_SECONDS = 24 * 3600
+PING_TIMEOUT_SECONDS = 20.0
+PING_CONCURRENCY = 4
+MAX_OPENROUTER_FREE_MODELS = 35
 _ERR_MAX = 240
 _ROUTE_ELIGIBLE_PROVIDERS = {"groq", "openai", "anthropic"}
 
@@ -75,7 +80,8 @@ _NON_TEXT_KEYWORDS = (
 )
 
 _ACTIVE_PROBE_TASK: Optional[asyncio.Task] = None
-_LAST_DISCOVERY_TS: float = 0.0
+_SINGLE_PROBE_TASKS: set = set()
+_PROBE_JOB: Dict[str, Any] = {"running": False, "phase": "", "done": 0, "total": 0}
 _PROVIDER_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
@@ -775,6 +781,7 @@ def get_models_status_snapshot() -> Dict[str, Any]:
     settings = load_runtime_settings()
     reg_rows = fetch_all_model_registry()
     statuses_map = fetch_all_model_statuses()
+    stored_providers = fetch_all_provider_statuses()
 
     keys_present = {
         "gemini": bool(settings.get("gemini_api_key")),
@@ -801,6 +808,8 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             raw_status = "no_key"
 
         checked_at = st_row.get("checked_at")
+        age = _age_seconds(checked_at)
+        is_stale = raw_status == "ok" and age is not None and age > STALE_STATUS_SECONDS
         p_src = r.get("price_source") or "unknown"
         in_p = r.get("input_price_per_1m")
         out_p = r.get("output_price_per_1m")
@@ -854,6 +863,8 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "error": st_row.get("message") or "",
             "checked_at": checked_at,
             "checked_ago_uk": format_checked_ago_uk(checked_at),
+            "check_kind": st_row.get("check_kind") or ("ping" if checked_at else "none"),
+            "is_stale": is_stale,
             "context_in": r.get("context_window") or 128000,
             "context_out": lim.get("output_limit") or 8192,
             "price_in": float(in_p) if price_known else None,
@@ -893,7 +904,7 @@ def get_models_status_snapshot() -> Dict[str, Any]:
     for pid in all_provider_ids:
         p_models = [m for m in models_out.values() if m["provider"] == pid]
         enabled_models = [m for m in p_models if m["enabled"]]
-        cached_prov = _PROVIDER_SUMMARY_CACHE.get(pid) or {}
+        cached_prov = _PROVIDER_SUMMARY_CACHE.get(pid) or stored_providers.get(pid) or {}
 
         checked_times = [m["checked_at"] for m in p_models if m.get("checked_at")]
         latest_check = max(checked_times) if checked_times else cached_prov.get("checked_at")
@@ -935,33 +946,40 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "latency_ms": cached_prov.get("latency_ms"),
         }
 
-    is_probing = _ACTIVE_PROBE_TASK is not None and not _ACTIVE_PROBE_TASK.done()
+    is_probing = _PROBE_JOB["running"] or any(not t.done() for t in _SINGLE_PROBE_TASKS)
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "is_probing": is_probing,
+        "probe": {
+            "running": _PROBE_JOB["running"],
+            "phase": _PROBE_JOB.get("phase", ""),
+            "done": _PROBE_JOB.get("done", 0),
+            "total": _PROBE_JOB.get("total", 0),
+            "queued": bool(_PROBE_JOB.get("queued")),
+        },
         "providers": providers_out,
         "models": models_out,
     }
 
 
-async def probe_all_providers(
-    model_key: Optional[str] = None,
-    only_enabled: bool = True,
-    force: bool = True,
-) -> Dict[str, Any]:
-    """
-    Двоступенева перевірка провайдерів і моделей:
-    1) Опитує списки моделей кожного провайдера незалежно (з кешем TTL) і оновлює model_registry.
-    2) Паралельно (з обмеженням одночасних запитів і таймаутом) виконує ping max_tokens=1
-       лише для увімкнених моделей (або для однієї вказаної моделі model_key).
-    """
-    global _LAST_DISCOVERY_TS
+def _age_seconds(timestamp: Optional[str]) -> Optional[float]:
+    if not timestamp:
+        return None
+    try:
+        return (datetime.now() - datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except ValueError:
+        return None
 
-    sync_model_registry_from_env()
-    settings = load_runtime_settings()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    keys = {
+def _listing_is_fresh() -> bool:
+    """Список моделей перепитується не частіше за TTL, час останнього опитування зберігається в базі."""
+    stored = fetch_all_provider_statuses()
+    ages = [_age_seconds(p.get("checked_at")) for p in stored.values()]
+    return bool(ages) and all(a is not None and a < DISCOVERY_TTL_SECONDS for a in ages)
+
+
+def _provider_keys(settings: Dict[str, Any]) -> Dict[str, str]:
+    return {
         "gemini": settings.get("gemini_api_key", ""),
         "groq": settings.get("groq_api_key", ""),
         "openai": settings.get("openai_api_key", ""),
@@ -970,221 +988,299 @@ async def probe_all_providers(
         "ollama": settings.get("ollama_base_url", "http://localhost:11434"),
     }
 
+
+def _remember_provider_report(pid: str, report: Dict[str, Any], now_str: str) -> None:
+    report["checked_at"] = now_str
+    _PROVIDER_SUMMARY_CACHE[pid] = report
+    upsert_provider_status(pid, report, now_str)
+
+
+def _merge_discovered_models(lists: Dict[str, Dict[str, Any]], now_str: str) -> None:
     pricing_data = load_models_pricing()
     pricing_map = pricing_data.get("models", pricing_data) if isinstance(pricing_data, dict) else {}
+    or_list = lists.get("openrouter", {})
+    by_prov_api = {(r["provider"], r["model_id"]): r["id"] for r in fetch_all_model_registry()}
+    catalog_source = {"rpm": "catalog", "rpd": "catalog", "tpm": "catalog"}
 
-    need_list_refresh = force or (time.time() - _LAST_DISCOVERY_TS > DISCOVERY_TTL_SECONDS) or not _PROVIDER_SUMMARY_CACHE
+    for pid in ("gemini", "groq", "openai", "anthropic", "ollama"):
+        prov_cfg = PROVIDERS_CATALOG.get(pid, {})
+        for api_name, facts in lists.get(pid, {}).items():
+            reg_id = by_prov_api.get((pid, api_name)) or (
+                api_name if api_name in DEFAULT_MODELS_CATALOG else f"{pid}:{api_name}"
+            )
+            seed_price = pricing_map.get(reg_id) or pricing_map.get(api_name) or {}
+            if facts.get("price_in") is not None and facts.get("price_out") is not None:
+                in_p, out_p, p_src = float(facts["price_in"]), float(facts["price_out"]), "api"
+            elif seed_price.get("input_per_1m") is not None:
+                in_p, out_p, p_src = float(seed_price["input_per_1m"]), float(seed_price["output_per_1m"]), "manual"
+            else:
+                in_p, out_p, p_src = None, None, "unknown"
+            upsert_model_registry_entry(
+                {
+                    "id": reg_id,
+                    "provider": pid,
+                    "model_id": api_name,
+                    "display_name": facts.get("display_name") or api_name,
+                    "source": "discovered",
+                    "base_url": prov_cfg.get("base_url", ""),
+                    "api_key_env": prov_cfg.get("env_key", ""),
+                    "context_window": facts.get("context_in") or 128000,
+                    "input_price_per_1m": in_p,
+                    "output_price_per_1m": out_p,
+                    "price_source": p_src,
+                    "limits": {
+                        "rpm": facts.get("rpm"),
+                        "rpd": facts.get("rpd"),
+                        "tpm": facts.get("tpm"),
+                        "limits_source": catalog_source,
+                        "output_limit": facts.get("context_out") or 8192,
+                        "openrouter_model": _match_openrouter_equivalent(pid, api_name, or_list),
+                        "family": facts.get("family") or pid,
+                    },
+                    "last_seen": now_str,
+                },
+                preserve_user_fields=True,
+            )
+    _merge_openrouter_free_models(or_list, now_str)
+
+
+def _merge_openrouter_free_models(or_list: Dict[str, Any], now_str: str) -> None:
+    added = 0
+    for or_api_name, facts in or_list.items():
+        if added >= MAX_OPENROUTER_FREE_MODELS:
+            break
+        if not (or_api_name.endswith(":free") or (facts.get("price_in") == 0.0 and facts.get("price_out") == 0.0)):
+            continue
+        added += 1
+        upsert_model_registry_entry(
+            {
+                "id": f"openrouter:{or_api_name}",
+                "provider": "openrouter",
+                "model_id": or_api_name,
+                "display_name": facts.get("display_name") or or_api_name,
+                "source": "discovered",
+                "base_url": PROVIDERS_CATALOG["openrouter"]["base_url"],
+                "api_key_env": "OPENROUTER_API_KEY",
+                "context_window": facts.get("context_in") or 128000,
+                "input_price_per_1m": 0.0,
+                "output_price_per_1m": 0.0,
+                "price_source": "api",
+                "limits": {
+                    "rpm": OPENROUTER_FREE_RPM_DOCS,
+                    "rpd": 50,
+                    "limits_source": {"rpm": "catalog", "rpd": "catalog"},
+                    "output_limit": facts.get("context_out") or 8192,
+                    "openrouter_model": or_api_name,
+                },
+                "last_seen": now_str,
+            },
+            preserve_user_fields=True,
+        )
+
+
+async def _discover_models(client: httpx.AsyncClient, keys: Dict[str, str], now_str: str) -> Tuple[Dict[str, Dict[str, Any]], set]:
+    """Опитує списки моделей усіх провайдерів незалежно й оновлює реєстр.
+
+    Повертає також множину провайдерів, чий список отримано успішно: лише їм можна вірити,
+    коли модель у списку не знайдено. Збій списку не має змінювати статуси моделей.
+    """
+    listers = {
+        "gemini": _list_gemini,
+        "groq": _list_groq,
+        "openai": _list_openai,
+        "anthropic": _list_anthropic,
+        "openrouter": _list_openrouter,
+        "ollama": _list_ollama,
+    }
+    pids = list(listers)
+    results = await asyncio.gather(*(listers[p](client, keys[p]) for p in pids), return_exceptions=True)
     lists: Dict[str, Dict[str, Any]] = {}
+    listed_ok: set = set()
+    for pid, res in zip(pids, results):
+        if isinstance(res, Exception):
+            status, message = classify_api_response(pid, None, raw_text=str(res), is_network_error=True)
+            report, models = {"status": status, "configured": bool(keys[pid]), "error": message}, {}
+        else:
+            report, models = res
+        _remember_provider_report(pid, report, now_str)
+        lists[pid] = models
+        if report.get("status") == "ok" and models:
+            listed_ok.add(pid)
+    _merge_discovered_models(lists, now_str)
+    return lists, listed_ok
+
+
+def _mark_inherited_statuses(lists: Dict[str, Dict[str, Any]], listed_ok: set, now_str: str) -> None:
+    """Для вимкнених моделей запит не витрачається: статус береться від провайдера або зі списку, з відповідною позначкою."""
+    for r in fetch_all_model_registry():
+        if r.get("enabled"):
+            continue
+        pid = r["provider"]
+        prov = _PROVIDER_SUMMARY_CACHE.get(pid) or {}
+        if prov.get("status") in ("no_key", "invalid_key", "no_credit", "offline"):
+            upsert_model_status(
+                r["id"], prov["status"], prov.get("http_status"), prov.get("latency_ms"),
+                prov.get("error", ""), now_str, check_kind="provider",
+            )
+        elif pid in listed_ok and r.get("source") != "custom" and pid != "ollama" and r["model_id"] not in lists[pid]:
+            upsert_model_status(
+                r["id"], "model_missing", 404, None, "Модель відсутня у списку API провайдера", now_str, check_kind="list",
+            )
+
+
+def _resolve_ping_target(r: Dict[str, Any], keys: Dict[str, str], settings: Dict[str, Any]) -> Dict[str, Any]:
+    pid = r["provider"]
+    lim = r.get("limits") or {}
+    via_openrouter = bool(
+        r.get("route") == "openrouter" and pid in _ROUTE_ELIGIBLE_PROVIDERS
+        and lim.get("openrouter_model") and keys.get("openrouter")
+    )
+    if via_openrouter:
+        model, base, key = lim["openrouter_model"], PROVIDERS_CATALOG["openrouter"]["base_url"], keys["openrouter"]
+    else:
+        model = settings.get("ollama_model_name", "llama3.2") if r["id"] == "ollama-local" else r["model_id"]
+        base = r.get("base_url") or PROVIDERS_CATALOG.get(pid, {}).get("base_url", "")
+        if pid == "ollama" and not r.get("base_url"):
+            base = keys["ollama"]
+        if pid in keys and pid != "ollama":
+            key = keys[pid]
+        elif r.get("api_key_env"):
+            env_name = r["api_key_env"].strip()
+            key = get_env_secret(env_name) if (env_name.isupper() or "_" in env_name) else env_name
+        else:
+            key = ""
+    return {"provider": "openrouter" if via_openrouter else pid, "model": model, "key": key, "base": base, "via_openrouter": via_openrouter}
+
+
+async def _check_one_model(
+    client: httpx.AsyncClient,
+    r: Dict[str, Any],
+    keys: Dict[str, str],
+    settings: Dict[str, Any],
+    lists: Dict[str, Dict[str, Any]],
+    listed_ok: set,
+    now_str: str,
+) -> None:
+    target = _resolve_ping_target(r, keys, settings)
+    pid = r["provider"]
+    if (
+        not target["via_openrouter"] and pid in listed_ok and r.get("source") != "custom"
+        and pid != "ollama" and target["model"] not in lists[pid]
+    ):
+        upsert_model_status(
+            r["id"], "model_missing", 404, None, f"Модель {target['model']} не знайдено у списку провайдера",
+            now_str, check_kind="list",
+        )
+        return
+    status, code, latency, message, header_limits = await _ping_single_model(
+        client=client, provider=target["provider"], api_model_name=target["model"],
+        api_key=target["key"], base_url=target["base"],
+    )
+    upsert_model_status(r["id"], status, code, latency, message, now_str)
+    if code is not None:
+        increment_daily_usage_count(r["id"])
+    if header_limits:
+        sources = {k: "header" for k in ("rpm", "rpd", "tpm") if header_limits.get(k) is not None}
+        upsert_model_registry_entry({**r, "limits": {**header_limits, "limits_source": sources}}, preserve_user_fields=True)
+
+
+async def _check_models(
+    client: httpx.AsyncClient,
+    targets: List[Dict[str, Any]],
+    keys: Dict[str, str],
+    settings: Dict[str, Any],
+    lists: Dict[str, Dict[str, Any]],
+    listed_ok: set,
+    now_str: str,
+    progress: Dict[str, Any],
+) -> None:
+    """Перевіряє кожну модель окремо: таймаут і збій однієї моделі не зупиняють інші."""
+    progress.update(phase="Перевірка моделей", done=0, total=len(targets))
+    semaphore = asyncio.Semaphore(PING_CONCURRENCY)
+
+    async def worker(r: Dict[str, Any]) -> None:
+        try:
+            async with semaphore:
+                await asyncio.wait_for(
+                    _check_one_model(client, r, keys, settings, lists, listed_ok, now_str), timeout=PING_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            upsert_model_status(r["id"], "offline", None, None, "Час очікування відповіді вичерпано", now_str)
+        except Exception as exc:
+            log_event("ДІАГНОСТИКА API", f"Не вдалося перевірити {r['id']}: {exc}", level="WARN")
+        finally:
+            progress["done"] += 1
+
+    await asyncio.gather(*(worker(t) for t in targets))
+
+
+def _experiment_is_running() -> bool:
+    return bool((get_logs_and_status().get("status") or {}).get("is_busy"))
+
+
+async def probe_all_providers(
+    model_key: Optional[str] = None,
+    only_enabled: bool = True,
+    force: bool = True,
+    progress: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Поновлює списки моделей (не частіше за TTL, якщо не force) і перевіряє увімкнені моделі окремо.
+
+    Під час експерименту запити-перевірки не надсилаються, щоб не витрачати квоту й не заважати серії.
+    """
+    progress = progress if progress is not None else {}
+    sync_model_registry_from_env()
+    settings = load_runtime_settings()
+    keys = _provider_keys(settings)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     async with httpx.AsyncClient(timeout=12.0) as client:
-        if need_list_refresh and model_key is None:
-            listers = {
-                "gemini": _list_gemini,
-                "groq": _list_groq,
-                "openai": _list_openai,
-                "anthropic": _list_anthropic,
-                "openrouter": _list_openrouter,
-                "ollama": _list_ollama,
-            }
-            pids = list(listers.keys())
-            results = await asyncio.gather(
-                *(listers[p](client, keys[p]) for p in pids),
-                return_exceptions=True,
-            )
-            for pid, res in zip(pids, results):
-                if isinstance(res, Exception):
-                    st, msg = classify_api_response(pid, None, raw_text=str(res), is_network_error=True)
-                    _PROVIDER_SUMMARY_CACHE[pid] = {
-                        "status": st,
-                        "configured": bool(keys[pid]),
-                        "error": msg,
-                        "checked_at": now_str,
-                    }
-                    lists[pid] = {}
-                else:
-                    prov_rep, prov_models = res
-                    prov_rep["checked_at"] = now_str
-                    _PROVIDER_SUMMARY_CACHE[pid] = prov_rep
-                    lists[pid] = prov_models
-            _LAST_DISCOVERY_TS = time.time()
+        lists: Dict[str, Dict[str, Any]] = {}
+        listed_ok: set = set()
+        if model_key is None and (force or not _listing_is_fresh()):
+            progress.update(phase="Пошук моделей", done=0, total=0)
+            lists, listed_ok = await _discover_models(client, keys, now_str)
+            _mark_inherited_statuses(lists, listed_ok, now_str)
 
-            or_list = lists.get("openrouter", {})
-            existing_reg = {r["id"]: r for r in fetch_all_model_registry()}
-            by_prov_api = {(r["provider"], r["model_id"]): r["id"] for r in existing_reg.values()}
-
-            for pid in ("gemini", "groq", "openai", "anthropic", "ollama"):
-                prov_cfg = PROVIDERS_CATALOG.get(pid, {})
-                for api_name, facts in lists.get(pid, {}).items():
-                    reg_id = by_prov_api.get((pid, api_name)) or (
-                        api_name if api_name in DEFAULT_MODELS_CATALOG else f"{pid}:{api_name}"
-                    )
-                    or_equiv = _match_openrouter_equivalent(pid, api_name, or_list)
-                    seed_price = pricing_map.get(reg_id) or pricing_map.get(api_name) or {}
-
-                    if facts.get("price_in") is not None and facts.get("price_out") is not None:
-                        in_p = float(facts["price_in"])
-                        out_p = float(facts["price_out"])
-                        p_src = "api"
-                    elif seed_price.get("input_per_1m") is not None:
-                        in_p = float(seed_price["input_per_1m"])
-                        out_p = float(seed_price["output_per_1m"])
-                        p_src = "manual"
-                    else:
-                        in_p = None
-                        out_p = None
-                        p_src = "unknown"
-
-                    upsert_model_registry_entry(
-                        {
-                            "id": reg_id,
-                            "provider": pid,
-                            "model_id": api_name,
-                            "display_name": facts.get("display_name") or api_name,
-                            "source": "discovered",
-                            "base_url": prov_cfg.get("base_url", ""),
-                            "api_key_env": prov_cfg.get("env_key", ""),
-                            "context_window": facts.get("context_in") or 128000,
-                            "input_price_per_1m": in_p,
-                            "output_price_per_1m": out_p,
-                            "price_source": p_src,
-                            "limits": {
-                                "rpm": facts.get("rpm"),
-                                "rpd": facts.get("rpd"),
-                                "tpm": facts.get("tpm"),
-                                "output_limit": facts.get("context_out") or 8192,
-                                "openrouter_model": or_equiv,
-                                "family": facts.get("family") or pid,
-                            },
-                            "last_seen": now_str,
-                        },
-                        preserve_user_fields=True,
-                    )
-
-            or_free_added = 0
-            for or_api_name, facts in or_list.items():
-                if or_free_added >= 35:
-                    break
-                if not (or_api_name.endswith(":free") or (facts.get("price_in") == 0.0 and facts.get("price_out") == 0.0)):
-                    continue
-                or_free_added += 1
-                reg_id = f"openrouter:{or_api_name}"
-                upsert_model_registry_entry(
-                    {
-                        "id": reg_id,
-                        "provider": "openrouter",
-                        "model_id": or_api_name,
-                        "display_name": facts.get("display_name") or or_api_name,
-                        "source": "discovered",
-                        "base_url": PROVIDERS_CATALOG["openrouter"]["base_url"],
-                        "api_key_env": "OPENROUTER_API_KEY",
-                        "context_window": facts.get("context_in") or 128000,
-                        "input_price_per_1m": 0.0,
-                        "output_price_per_1m": 0.0,
-                        "price_source": "api",
-                        "limits": {
-                            "rpm": OPENROUTER_FREE_RPM_DOCS,
-                            "rpd": 50,
-                            "output_limit": facts.get("context_out") or 8192,
-                            "openrouter_model": or_api_name,
-                        },
-                        "last_seen": now_str,
-                    },
-                    preserve_user_fields=True,
-                )
-
-        # Крок 2: Перевірка моделей (max_tokens=1 тільки для увімкнених або точково для model_key)
         all_reg = fetch_all_model_registry()
         if model_key:
-            targets = [r for r in all_reg if r["id"] == model_key or r["model_id"] == model_key]
-        elif only_enabled:
-            targets = [r for r in all_reg if r.get("enabled")]
+            targets = [r for r in all_reg if model_key in (r["id"], r["model_id"])]
         else:
-            targets = all_reg
+            targets = [r for r in all_reg if r.get("enabled")] if only_enabled else all_reg
+        if targets and model_key is None and _experiment_is_running():
+            log_event("ДІАГНОСТИКА API", "Перевірку моделей запитами пропущено: триває експеримент.", level="INFO")
+            targets = []
+        await _check_models(client, targets, keys, settings, lists, listed_ok, now_str, progress)
+    return get_models_status_snapshot()
 
-        # Оновлюємо очевидні статуси для вимкнених моделей (no_key, model_missing, offline) без платних викликів
-        if not model_key and lists:
-            for r in all_reg:
-                if r.get("enabled"):
-                    continue
-                pid = r["provider"]
-                prov_rep = _PROVIDER_SUMMARY_CACHE.get(pid) or {}
-                prov_st = prov_rep.get("status")
-                if prov_st in ("no_key", "invalid_key", "no_credit", "offline"):
-                    upsert_model_status(r["id"], prov_st, prov_rep.get("http_status"), prov_rep.get("latency_ms"), prov_rep.get("error", ""), now_str)
-                elif pid in lists and r.get("source") != "custom":
-                    if r["model_id"] not in lists[pid] and pid != "ollama":
-                        upsert_model_status(r["id"], "model_missing", 404, None, "Модель відсутня у списку API провайдера", now_str)
 
-        sem = asyncio.Semaphore(4)
+def _launch_probe(params: Dict[str, Any]) -> asyncio.Task:
+    global _ACTIVE_PROBE_TASK
 
-        async def _check_one(r: Dict[str, Any]) -> None:
-            async with sem:
-                mid = r["id"]
-                pid = r["provider"]
-                lim = r.get("limits") or {}
-                use_or = (
-                    r.get("route") == "openrouter"
-                    and pid in _ROUTE_ELIGIBLE_PROVIDERS
-                    and lim.get("openrouter_model")
-                    and bool(keys.get("openrouter"))
-                )
-                eff_prov = "openrouter" if use_or else pid
-                eff_model = lim.get("openrouter_model") if use_or else (
-                    settings.get("ollama_model_name", "llama3.2") if mid == "ollama-local" else r["model_id"]
-                )
-                eff_base = (
-                    PROVIDERS_CATALOG["openrouter"]["base_url"]
-                    if use_or
-                    else (r.get("base_url") or PROVIDERS_CATALOG.get(pid, {}).get("base_url", ""))
-                )
-                if pid == "ollama" and not r.get("base_url"):
-                    eff_base = keys["ollama"]
+    async def runner() -> None:
+        global _ACTIVE_PROBE_TASK
+        single = params.get("model_key") is not None
+        progress = {"phase": "", "done": 0, "total": 0} if single else _PROBE_JOB
+        try:
+            await probe_all_providers(**params, progress=progress)
+        except Exception as exc:
+            log_event("ДІАГНОСТИКА API", f"Помилка фонової перевірки моделей: {exc}", level="ERROR")
+        finally:
+            if not single:
+                _PROBE_JOB.update(running=False, phase="")
+                queued = _PROBE_JOB.pop("queued", None)
+                if queued:
+                    _ACTIVE_PROBE_TASK = _launch_probe(queued)
 
-                if use_or:
-                    eff_key = keys["openrouter"]
-                elif pid in keys and pid != "ollama":
-                    eff_key = keys[pid]
-                elif r.get("api_key_env"):
-                    cand_env = r["api_key_env"].strip()
-                    eff_key = get_env_secret(cand_env) if (cand_env.isupper() or "_" in cand_env) else cand_env
-                else:
-                    eff_key = ""
-
-                # Якщо список провайдера вже показав відсутність моделі — не витрачаємо запит
-                if not use_or and pid in lists and r.get("source") != "custom" and pid != "ollama":
-                    if lists[pid] and eff_model not in lists[pid]:
-                        upsert_model_status(mid, "model_missing", 404, None, f"Модель {eff_model} не знайдено у списку провайдера", now_str)
-                        return
-
-                st, code, lat, msg, hdr_lim = await _ping_single_model(
-                    client=client,
-                    provider=eff_prov,
-                    api_model_name=eff_model,
-                    api_key=eff_key,
-                    base_url=eff_base,
-                )
-                upsert_model_status(mid, st, code, lat, msg, now_str)
-                if hdr_lim:
-                    merged_lim = {**lim, **hdr_lim}
-                    r_update = dict(r)
-                    r_update["limits"] = merged_lim
-                    upsert_model_registry_entry(r_update, preserve_user_fields=True)
-
-        if targets:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*(_check_one(t) for t in targets), return_exceptions=True),
-                    timeout=25.0,
-                )
-            except asyncio.TimeoutError:
-                log_event("ДІАГНОСТИКА API", "Частина перевірок моделей перевищила загальний таймаут 25 с.", level="WARN")
-
-    snapshot = get_models_status_snapshot()
-    try:
-        PROBE_CACHE_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-    return snapshot
+    if params.get("model_key") is None:
+        _PROBE_JOB.update(running=True, phase="Пошук моделей", done=0, total=0)
+    task = asyncio.create_task(runner())
+    if params.get("model_key") is None:
+        _ACTIVE_PROBE_TASK = task
+    else:
+        _SINGLE_PROBE_TASKS.add(task)
+        task.add_done_callback(_SINGLE_PROBE_TASKS.discard)
+    return task
 
 
 def start_probe_task(
@@ -1192,18 +1288,12 @@ def start_probe_task(
     only_enabled: bool = True,
     force: bool = True,
 ) -> Dict[str, Any]:
-    """Запускає перевірку моделей у фоновому режимі та миттєво повертає керування."""
-    global _ACTIVE_PROBE_TASK
-    if _ACTIVE_PROBE_TASK is not None and not _ACTIVE_PROBE_TASK.done() and model_key is None:
-        return {"started": False, "already_running": True, "snapshot": get_models_status_snapshot()}
-
-    async def _runner():
-        try:
-            await probe_all_providers(model_key=model_key, only_enabled=only_enabled, force=force)
-        except Exception as exc:
-            log_event("ДІАГНОСТИКА API", f"Помилка фонової перевірки моделей: {exc}", level="ERROR")
-
-    _ACTIVE_PROBE_TASK = asyncio.create_task(_runner())
+    """Запускає перевірку у фоні. Якщо загальна перевірка вже триває, новий запит ставиться в чергу, а не губиться."""
+    params = {"model_key": model_key, "only_enabled": only_enabled, "force": force}
+    if model_key is None and _PROBE_JOB["running"]:
+        _PROBE_JOB["queued"] = params
+        return {"started": False, "already_running": True, "queued": True, "snapshot": get_models_status_snapshot()}
+    _launch_probe(params)
     return {"started": True, "model_key": model_key, "snapshot": get_models_status_snapshot()}
 
 
