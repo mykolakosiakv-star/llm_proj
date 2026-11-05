@@ -282,7 +282,7 @@ async function loadKbDrafts() {
         <div class="text-xs text-slate-500">${escapeHtml(label)} <span class="font-mono">${escapeHtml(key)}</span>${sub ? `. ${escapeHtml(sub)}` : ''}</div>
         <textarea rows="2" id="draft-${escapeHtml(key)}" class="w-full border border-slate-300 rounded-lg p-2 text-sm">${escapeHtml(text)}</textarea>
         <div class="flex gap-2">
-            <button onclick="reviewKbDraft('${kind}', '${escapeHtml(key)}', 'approve')" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">Затвердити</button>
+            <button data-kind="${kind}" data-key="${escapeHtml(key)}" onclick="reviewKbDraft('${kind}', '${escapeHtml(key)}', 'approve')" class="kb-approve px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">Затвердити</button>
             <button onclick="reviewKbDraft('${kind}', '${escapeHtml(key)}', 'reject')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-xs font-medium">Відхилити</button>
         </div></div>`;
     const items = [
@@ -372,4 +372,20 @@ async function generateKbDrafts() {
         btn.disabled = false;
         btn.textContent = 'Створити чернетки';
     }
+}
+
+async function approveAllKbDrafts() {
+    const buttons = Array.from(document.querySelectorAll('#kbDrafts .kb-approve'));
+    if (!buttons.length) return;
+    if (!confirm(`Затвердити ${buttons.length} чернеток? Вони потраплять у серії й у пошук. Переконайтеся, що ви їх переглянули.`)) return;
+    for (const btn of buttons) {
+        const key = btn.dataset.key;
+        await fetch('/api/kb/review', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: btn.dataset.kind, key, action: 'approve', text: document.getElementById(`draft-${key}`)?.value || '' }),
+        });
+    }
+    await refreshMetadataAndData();
+    await loadKbPanels();
 }
