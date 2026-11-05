@@ -124,6 +124,9 @@ def init_db() -> None:
     _ensure_column(cur, "queries", "domain", "TEXT NOT NULL DEFAULT 'fintech'")
     _ensure_column(cur, "queries", "source", "TEXT NOT NULL DEFAULT 'manual'")
     _ensure_column(cur, "queries", "review_status", "TEXT NOT NULL DEFAULT 'reviewed'")
+    _ensure_column(cur, "queries", "variant_of", "TEXT DEFAULT NULL")
+    _ensure_column(cur, "queries", "variant_type", "TEXT NOT NULL DEFAULT 'original'")
+    _ensure_column(cur, "queries", "lang", "TEXT NOT NULL DEFAULT 'uk'")
 
     cur.execute(
         """
@@ -401,6 +404,47 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kb_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_code TEXT UNIQUE NOT NULL,
+            domain TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'manual',
+            source_ref TEXT NOT NULL DEFAULT '',
+            lang TEXT NOT NULL DEFAULT 'uk',
+            is_distractor INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'reviewed',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kb_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL REFERENCES kb_documents(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL DEFAULT 0,
+            text TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            UNIQUE(document_id, chunk_index)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS query_gold_chunks (
+            query_id INTEGER NOT NULL REFERENCES queries(id) ON DELETE CASCADE,
+            chunk_id INTEGER NOT NULL REFERENCES kb_chunks(id) ON DELETE CASCADE,
+            PRIMARY KEY (query_id, chunk_id)
+        )
+        """
+    )
+    _ensure_column(cur, "experiment_runs", "corpus_version", "TEXT NOT NULL DEFAULT ''")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_kb_chunks_domain ON kb_chunks(domain)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_kb_docs_domain_review ON kb_documents(domain, review_status)")
+
     # Складені індекси під запити аналітики й перегляду замірів; поодинокі індекси за model, prompt, category
     # мали низьку вибірковість і більше не потрібні
     for obsolete in ("idx_eval_model", "idx_eval_prompt", "idx_eval_category", "idx_eval_context_mode"):
@@ -431,6 +475,7 @@ def init_db() -> None:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.close()
+    backfill_kb_from_queries()
 
 
 def fetch_all_domains() -> List[Dict[str, Any]]:
@@ -507,8 +552,10 @@ def upsert_domain(data: Dict[str, Any]) -> Dict[str, Any]:
     return fetch_domain_by_code(code) or data
 
 
-def fetch_all_queries(category: Optional[str] = None, domain: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Повертає список типових запитів з бази даних (опціонально фільтруючи за категорією та доменом)."""
+def fetch_all_queries(
+    category: Optional[str] = None, domain: Optional[str] = None, reviewed_only: bool = False
+) -> List[Dict[str, Any]]:
+    """Повертає типові запити (за категорією та сферою). Для серій беруться лише перевірені людиною, без чернеток."""
     conn = get_connection()
     cur = conn.cursor()
     sql = "SELECT * FROM queries WHERE 1=1"
@@ -519,6 +566,8 @@ def fetch_all_queries(category: Optional[str] = None, domain: Optional[str] = No
     if domain and domain != "all":
         sql += " AND domain = ?"
         params.append(domain)
+    if reviewed_only:
+        sql += " AND review_status = 'reviewed'"
     sql += " ORDER BY id ASC"
     cur.execute(sql, tuple(params))
     rows = cur.fetchall()
@@ -554,20 +603,19 @@ def fetch_query_by_id(query_id: int) -> Optional[Dict[str, Any]]:
     return item
 
 
+QUERY_SOURCES = ("manual", "llm_draft", "faq_upload")
+
+
 def upsert_query_item(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Додає новий або оновлює існуючий типовий запит за його кодом і синхронізує його фрагмент у корпусі знань."""
     global _DATASET_HASH_CACHE
     _DATASET_HASH_CACHE = None
-    """Додає новий або оновлює існуючий типовий запит за його кодом."""
     conn = get_connection()
     cur = conn.cursor()
-    kw_json = json.dumps(data.get("required_keywords", []), ensure_ascii=False)
-    esc = 1 if data.get("expected_escalation") else 0
-    comp = int(data.get("complexity", 2))
-    dom = str(data.get("domain") or "fintech")
     src = str(data.get("source") or "manual")
-    if src not in ("manual", "llm_draft"):
+    if src not in QUERY_SOURCES:
         src = "manual"
-    rev = str(data.get("review_status") or ("draft" if src == "llm_draft" else "reviewed"))
+    rev = str(data.get("review_status") or ("reviewed" if src == "manual" else "draft"))
     if rev not in ("draft", "reviewed"):
         rev = "reviewed"
 
@@ -575,9 +623,10 @@ def upsert_query_item(data: Dict[str, Any]) -> Dict[str, Any]:
         """
         INSERT INTO queries (
             code, domain, category, user_query, context_fact, reference_answer,
-            required_keywords_json, expected_escalation, complexity, source, review_status
+            required_keywords_json, expected_escalation, complexity, source, review_status,
+            variant_of, variant_type, lang
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(code) DO UPDATE SET
             domain = excluded.domain,
             category = excluded.category,
@@ -588,32 +637,150 @@ def upsert_query_item(data: Dict[str, Any]) -> Dict[str, Any]:
             expected_escalation = excluded.expected_escalation,
             complexity = excluded.complexity,
             source = excluded.source,
-            review_status = excluded.review_status
+            review_status = excluded.review_status,
+            variant_of = excluded.variant_of,
+            variant_type = excluded.variant_type,
+            lang = excluded.lang
         """,
         (
             data["code"],
-            dom,
+            str(data.get("domain") or "fintech"),
             data["category"],
             data["user_query"],
             data["context_fact"],
             data["reference_answer"],
-            kw_json,
-            esc,
-            comp,
+            json.dumps(data.get("required_keywords", []), ensure_ascii=False),
+            1 if data.get("expected_escalation") else 0,
+            int(data.get("complexity", 2)),
             src,
             rev,
+            data.get("variant_of"),
+            str(data.get("variant_type") or "original"),
+            str(data.get("lang") or "uk"),
         ),
     )
+    row = cur.execute("SELECT * FROM queries WHERE code = ?", (data["code"],)).fetchone()
+    _sync_query_to_kb(cur, row)
     conn.commit()
-    cur.execute("SELECT * FROM queries WHERE code = ?", (data["code"],))
-    row = dict(cur.fetchone())
+    row = dict(row)
     conn.close()
     row["domain"] = row.get("domain") or "fintech"
-    row["source"] = row.get("source") or "manual"
-    row["review_status"] = row.get("review_status") or "reviewed"
     row["required_keywords"] = json.loads(row.pop("required_keywords_json", "[]"))
     row["expected_escalation"] = bool(row["expected_escalation"])
     return row
+
+
+def _sync_query_to_kb(cur: sqlite3.Cursor, q: sqlite3.Row) -> None:
+    """Кожен запит має фрагмент-відповідь у корпусі. Перефрази ділять фрагмент оригіналу, власного не мають."""
+    if q["variant_of"]:
+        chunk = cur.execute(
+            "SELECT c.id FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id WHERE d.doc_code = ?",
+            (q["variant_of"],),
+        ).fetchone()
+        if chunk:
+            cur.execute("INSERT OR IGNORE INTO query_gold_chunks (query_id, chunk_id) VALUES (?, ?)", (q["id"], chunk["id"]))
+        return
+    doc = cur.execute("SELECT id, source FROM kb_documents WHERE doc_code = ?", (q["code"],)).fetchone()
+    if doc is None:
+        doc_id = cur.execute(
+            "INSERT INTO kb_documents (doc_code, domain, title, source, lang, review_status, created_at) "
+            "VALUES (?, ?, ?, 'legacy_context_fact', ?, ?, ?)",
+            (q["code"], q["domain"], q["code"], q["lang"], q["review_status"], datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ).lastrowid
+        cur.execute(
+            "INSERT INTO kb_chunks (document_id, chunk_index, text, domain) VALUES (?, 0, ?, ?)",
+            (doc_id, q["context_fact"], q["domain"]),
+        )
+    else:
+        doc_id = doc["id"]
+        if doc["source"] == "legacy_context_fact":
+            cur.execute("UPDATE kb_documents SET domain = ?, review_status = ? WHERE id = ?", (q["domain"], q["review_status"], doc_id))
+            cur.execute("UPDATE kb_chunks SET text = ?, domain = ? WHERE document_id = ? AND chunk_index = 0", (q["context_fact"], q["domain"], doc_id))
+    chunk_id = cur.execute("SELECT id FROM kb_chunks WHERE document_id = ? AND chunk_index = 0", (doc_id,)).fetchone()["id"]
+    cur.execute("INSERT OR IGNORE INTO query_gold_chunks (query_id, chunk_id) VALUES (?, ?)", (q["id"], chunk_id))
+
+
+def backfill_kb_from_queries() -> None:
+    """Переносить фрагменти існуючих запитів у корпус. Безпечно викликається повторно."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        rows = cur.execute("SELECT * FROM queries ORDER BY (variant_of IS NOT NULL), id").fetchall()
+        for q in rows:
+            _sync_query_to_kb(cur, q)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fetch_kb_chunks(domain: Optional[str] = None, include_drafts: bool = False) -> List[Dict[str, Any]]:
+    """Фрагменти корпусу сфери у вигляді, який приймає пошук. Чернетки в пошук не потрапляють."""
+    sql = (
+        "SELECT d.doc_code AS code, c.text AS context_fact, c.domain AS domain, d.is_distractor AS is_distractor, "
+        "d.review_status AS review_status FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id WHERE 1 = 1"
+    )
+    params: List[Any] = []
+    if domain and domain != "all":
+        sql += " AND c.domain = ?"
+        params.append(domain)
+    if not include_drafts:
+        sql += " AND d.review_status = 'reviewed'"
+    sql += " ORDER BY d.id, c.chunk_index"
+    conn = get_connection()
+    try:
+        return [{**dict(r), "category": ""} for r in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def fetch_gold_doc_codes(query_code: str) -> List[str]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT d.doc_code FROM query_gold_chunks g JOIN queries q ON q.id = g.query_id "
+            "JOIN kb_chunks c ON c.id = g.chunk_id JOIN kb_documents d ON d.id = c.document_id WHERE q.code = ?",
+            (query_code,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r["doc_code"] for r in rows]
+
+
+def add_kb_document(
+    domain: str,
+    text: str,
+    title: str = "",
+    source: str = "manual",
+    is_distractor: bool = False,
+    review_status: str = "reviewed",
+    lang: str = "uk",
+    source_ref: str = "",
+) -> str:
+    """Додає документ із одним фрагментом у корпус сфери й повертає його код."""
+    conn = get_connection()
+    try:
+        number = conn.execute("SELECT COUNT(*) FROM kb_documents WHERE domain = ?", (domain,)).fetchone()[0] + 1
+        code = f"KB-{domain[:3].upper()}-{number:04d}"
+        while conn.execute("SELECT 1 FROM kb_documents WHERE doc_code = ?", (code,)).fetchone():
+            number += 1
+            code = f"KB-{domain[:3].upper()}-{number:04d}"
+        doc_id = conn.execute(
+            "INSERT INTO kb_documents (doc_code, domain, title, source, source_ref, lang, is_distractor, review_status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (code, domain, title or code, source, source_ref, lang, 1 if is_distractor else 0, review_status,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ).lastrowid
+        conn.execute("INSERT INTO kb_chunks (document_id, chunk_index, text, domain) VALUES (?, 0, ?, ?)", (doc_id, text, domain))
+        conn.commit()
+        return code
+    finally:
+        conn.close()
+
+
+def compute_kb_hash() -> str:
+    """Відбиток перевіреного корпусу: за ним видно, чи порівнянні серії за базою знань."""
+    rows = [(c["code"], c["domain"], c["context_fact"]) for c in fetch_kb_chunks("all")]
+    return hashlib.sha256(json.dumps(sorted(rows), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
 def fetch_all_prompts() -> List[Dict[str, Any]]:

@@ -1562,3 +1562,48 @@ def test_hypotheses_overview_endpoint_reports_no_data_honestly():
     body = res.json()
     # у чистій базі завершених серій немає, висновків теж
     assert body["available"] is False and body["runs"] == 0
+
+
+def test_every_query_has_a_gold_fragment_in_the_knowledge_base():
+    from app.database import fetch_all_queries, fetch_gold_doc_codes, fetch_kb_chunks
+    queries = fetch_all_queries()
+    assert queries and all(fetch_gold_doc_codes(q["code"]) == [q["code"]] for q in queries)
+    corpus = {c["code"]: c["context_fact"] for c in fetch_kb_chunks("all")}
+    assert all(corpus[q["code"]] == q["context_fact"] for q in queries if q["review_status"] == "reviewed")
+
+
+def test_drafts_stay_out_of_search_and_series_until_reviewed():
+    from app.database import add_kb_document, fetch_kb_chunks, fetch_all_queries, upsert_query_item, get_connection
+    code = add_kb_document("fintech", "Чернетка про ліміт переказів на карту сусіда.", source="llm_draft", is_distractor=True, review_status="draft")
+    assert code not in {c["code"] for c in fetch_kb_chunks("fintech")}
+    assert code in {c["code"] for c in fetch_kb_chunks("fintech", include_drafts=True)}
+    item = {"code": "DRAFT-T1", "domain": "fintech", "category": "informational", "user_query": "Тестовий запит?", "context_fact": "Факт.",
+            "reference_answer": "Факт.", "required_keywords": ["факт"], "source": "llm_draft"}
+    assert upsert_query_item(item)["review_status"] == "draft"
+    assert "DRAFT-T1" not in {q["code"] for q in fetch_all_queries(reviewed_only=True)}
+    assert "DRAFT-T1" in {q["code"] for q in fetch_all_queries()}
+    conn = get_connection()
+    conn.execute("DELETE FROM queries WHERE code = 'DRAFT-T1'")
+    conn.execute("DELETE FROM kb_documents WHERE doc_code IN ('DRAFT-T1', ?)", (code,))
+    conn.commit()
+    conn.close()
+
+
+def test_paraphrase_shares_the_gold_fragment_and_distractors_make_search_harder():
+    from app.database import add_kb_document, upsert_query_item, fetch_all_queries, get_connection
+    from app.services.retrieval import retrieve_knowledge_chunks
+    base = next(q for q in fetch_all_queries(domain="fintech", reviewed_only=True) if q["category"] == "informational")
+    variant = {**base, "code": base["code"] + "-V1", "user_query": base["user_query"] + " Поясніть, будь ласка.", "variant_of": base["code"],
+               "variant_type": "paraphrase", "source": "llm_draft", "review_status": "reviewed"}
+    upsert_query_item(variant)
+    clean = retrieve_knowledge_chunks(base["user_query"], "fintech", top_k=1, gold_query_code=variant["code"])
+    assert clean["hit_at_1"] == 1
+    # дистрактор майже дослівно повторює запит, тому випереджає потрібний фрагмент
+    distractor = add_kb_document("fintech", base["user_query"] + " " + base["user_query"], is_distractor=True)
+    harder = retrieve_knowledge_chunks(base["user_query"], "fintech", top_k=1, gold_query_code=variant["code"])
+    assert harder["hit_at_1"] == 0 and harder["retrieved_ids"] == [distractor]
+    conn = get_connection()
+    conn.execute("DELETE FROM queries WHERE code = ?", (variant["code"],))
+    conn.execute("DELETE FROM kb_documents WHERE doc_code = ?", (distractor,))
+    conn.commit()
+    conn.close()

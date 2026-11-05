@@ -54,11 +54,11 @@ def select_few_shot_examples(
     Детерміновано підбирає few-shot приклади для стратегії P4 у межах предметної сфери:
     виключає поточний запит за кодом та за текстом і мінімізує лексичний перетин із поточним запитом.
     """
-    candidates = fetch_all_queries(category=category, domain=domain)
+    candidates = fetch_all_queries(category=category, domain=domain, reviewed_only=True)
     if not candidates:
-        candidates = fetch_all_queries(domain=domain)
+        candidates = fetch_all_queries(domain=domain, reviewed_only=True)
     if not candidates:
-        candidates = fetch_all_queries(category=category)
+        candidates = fetch_all_queries(category=category, reviewed_only=True)
 
     cur_tokens = tokenize_uk(current_user_query or "")
     cur_norm = (current_user_query or "").strip().lower()

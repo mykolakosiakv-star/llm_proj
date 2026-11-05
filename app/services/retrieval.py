@@ -8,7 +8,7 @@ from collections import Counter
 import math
 from typing import Dict, Any, List, Optional
 from app.config import DEFAULT_TOP_K
-from app.database import fetch_all_queries
+from app.database import fetch_all_queries, fetch_gold_doc_codes, fetch_kb_chunks
 from app.services.classifier import tokenize_uk, stem_uk_token
 
 
@@ -96,19 +96,23 @@ class BM25KnowledgeIndex:
         return top_items
 
 
+def _load_corpus(domain: str, corpus_mode: str) -> List[Dict[str, Any]]:
+    # legacy: фрагменти лише з тестових запитів (як у ранніх серіях); kb: повний корпус із дистракторами
+    if corpus_mode == "legacy":
+        return fetch_all_queries(domain=domain, reviewed_only=True) or fetch_all_queries(reviewed_only=True)
+    return fetch_kb_chunks(domain) or fetch_kb_chunks("all")
+
+
 def retrieve_knowledge_chunks(
     user_query: str,
     domain: str = "fintech",
     top_k: int = DEFAULT_TOP_K,
     gold_query_code: Optional[str] = None,
     corpus: Optional[List[Dict[str, Any]]] = None,
+    corpus_mode: str = "kb",
 ) -> Dict[str, Any]:
-    """
-    Виконує BM25-пошук top-k фрагментів знань у межах предметної сфери та обчислює hit@1 і hit@3.
-    """
-    domain_items = corpus if corpus is not None else fetch_all_queries(domain=domain)
-    if not domain_items and corpus is None:
-        domain_items = fetch_all_queries()
+    """Виконує BM25-пошук top-k фрагментів знань у межах сфери та обчислює hit@1 і hit@3."""
+    domain_items = corpus if corpus is not None else _load_corpus(domain, corpus_mode)
 
     index = BM25KnowledgeIndex(domain_items)
     effective_k = max(1, int(top_k or DEFAULT_TOP_K))
@@ -122,8 +126,10 @@ def retrieve_knowledge_chunks(
     hit_at_1: Optional[int] = None
     hit_at_3: Optional[int] = None
     if gold_query_code:
-        hit_at_1 = 1 if (top_results and top_results[0]["code"] == gold_query_code) else 0
-        hit_at_3 = 1 if (gold_query_code in top3_ids) else 0
+        # Потрібний фрагмент може бути й не під кодом самого запиту (перефрази ділять фрагмент оригіналу)
+        gold_codes = {gold_query_code} if corpus is not None else (set(fetch_gold_doc_codes(gold_query_code)) or {gold_query_code})
+        hit_at_1 = 1 if (top_results and top_results[0]["code"] in gold_codes) else 0
+        hit_at_3 = 1 if gold_codes & set(top3_ids) else 0
 
     assembled_lines = [
         f"[{idx}] ({item['code']}) {item['context_fact']}"
@@ -147,6 +153,7 @@ def resolve_experiment_context(
     domain: str = "fintech",
     top_k: int = DEFAULT_TOP_K,
     corpus: Optional[List[Dict[str, Any]]] = None,
+    corpus_mode: str = "kb",
 ) -> Dict[str, Any]:
     """
     Формує контекст, який подається у промпт моделі залежно від режиму context_mode:
@@ -182,6 +189,7 @@ def resolve_experiment_context(
             top_k=effective_k,
             gold_query_code=gold_code or None,
             corpus=corpus,
+            corpus_mode=corpus_mode,
         )
         return {
             "context_mode": "retrieved_context",

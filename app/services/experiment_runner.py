@@ -28,6 +28,7 @@ from app.database import (
     sync_run_counters,
     compute_code_version_hash,
     compute_dataset_hash,
+    compute_kb_hash,
     log_run_error,
     ensure_sandbox_run_id,
 )
@@ -605,7 +606,7 @@ def select_stratified_queries(
         target_domains = available_domains
     else:
         cats = categories or list(QUERY_CATEGORIES.keys())
-        all_corpus = fetch_all_queries(domain="all")
+        all_corpus = fetch_all_queries(domain="all", reviewed_only=True)
         available_domains = sorted(list({str(q.get("domain") or "fintech") for q in all_corpus})) or ["fintech"]
 
         if domains and len(domains) > 0:
@@ -729,6 +730,7 @@ def _create_batch_run_record(
     }
     code_ver = compute_code_version_hash()
     ds_hash = compute_dataset_hash()
+    corpus_ver = compute_kb_hash()
     ctx_mode_col = ",".join(modes)
 
     sync_run_counters()
@@ -741,8 +743,8 @@ def _create_batch_run_record(
             models_json, prompts_json, categories_json,
             repeats, total_items, completed_items, status,
             dataset_version, dataset_hash, code_version, settings_snapshot_json,
-            context_mode, top_k
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'running', ?, ?, ?, ?, ?, ?)
+            context_mode, top_k, corpus_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'running', ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             title,
@@ -760,6 +762,7 @@ def _create_batch_run_record(
             json.dumps(settings_snapshot, ensure_ascii=False),
             ctx_mode_col,
             eff_top_k,
+            corpus_ver,
         ),
     )
     run_id = int(cur.lastrowid)
@@ -854,7 +857,6 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
                 break
             cat_info = QUERY_CATEGORIES.get(q["category"], QUERY_CATEGORIES["informational"])
             q_domain = str(q.get("domain") or (eff_domain.split(",")[0] if eff_domain else "fintech") or "fintech")
-            dom_corpus = [x for x in all_queries if str(x.get("domain") or "fintech") == q_domain] or all_queries
             for ctx_mode in modes:
                 if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
                     break
@@ -863,7 +865,6 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
                     context_mode=ctx_mode,
                     domain=q_domain,
                     top_k=eff_top_k,
-                    corpus=dom_corpus,
                 )
                 for p_code in prompt_codes:
                     if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
@@ -1358,9 +1359,9 @@ async def resume_batch_experiment(
     max_queries_per_category = int(snapshot.get("max_queries_per_category") or max(1, round(total_items / denom)))
 
     run_domain = str(snapshot.get("domain") or "fintech")
-    all_queries = fetch_all_queries(domain=run_domain)
+    all_queries = fetch_all_queries(domain=run_domain, reviewed_only=True)
     if not all_queries:
-        all_queries = fetch_all_queries(domain="fintech")
+        all_queries = fetch_all_queries(domain="fintech", reviewed_only=True)
     selected_queries = []
     for cat in categories:
         cat_qs = [q for q in all_queries if q["category"] == cat][:max_queries_per_category]
@@ -1437,7 +1438,6 @@ async def resume_batch_experiment(
                                     context_mode=ctx_mode,
                                     domain=run_domain,
                                     top_k=eff_top_k,
-                                    corpus=all_queries,
                                 )
                             if prompt_pack is None:
                                 prompt_pack = build_prompt_messages(

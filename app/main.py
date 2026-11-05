@@ -1254,7 +1254,7 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
     modes = payload.get("context_modes") or ([payload.get("context_mode")] if payload.get("context_mode") else ["gold_context"])
     modes_count = max(1, len(modes))
 
-    all_queries = fetch_all_queries(domain=domain)
+    all_queries = fetch_all_queries(domain=domain, reviewed_only=True)
     selected_queries_count = 0
     for cat in categories:
         cat_qs = [q for q in all_queries if q.get("category") == cat]
