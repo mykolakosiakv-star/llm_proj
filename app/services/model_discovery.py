@@ -197,11 +197,13 @@ def classify_api_response(
             return "no_credit", msg
         if http_code in (401, 403) or type_low in ("authentication_error", "permission_error"):
             return "invalid_key", msg
-        if http_code in (429, 529) or type_low in ("rate_limit_error", "overloaded_error"):
+        if http_code == 429 or type_low == "rate_limit_error":
             return "rate_limited", msg
+        if http_code == 529 or type_low == "overloaded_error":
+            return "offline", msg
 
     if prov == "gemini":
-        if "api_key_invalid" in details_low or "api key not valid" in msg_low or http_code in (401, 403):
+        if "api_key_invalid" in details_low or "api key not valid" in msg_low or "api key expired" in msg_low or http_code in (401, 403):
             return "invalid_key", msg
         if http_code == 429 or status_low == "resource_exhausted":
             has_per_day = (
@@ -235,12 +237,14 @@ def classify_api_response(
         return "invalid_key", msg
     if http_code == 402 or code_low == "insufficient_quota":
         return "no_credit", msg
-    if http_code in (429, 529, 503):
+    if http_code == 429:
         if "per day" in msg_low or "(rpd)" in msg_low or "perday" in details_low:
             return "daily_quota", msg
         return "rate_limited", msg
 
-    return "offline" if http_code >= 500 else "model_missing", msg
+    # Перевантаження сервера (503, 529) не є лімітом користувача. Невідома помилка 4xx
+    # не доводить, що моделі немає, тому статус лишається непевним, а текст помилки видно в інтерфейсі.
+    return ("offline" if http_code >= 500 else "unchecked"), msg
 
 
 def is_text_generation_model(
@@ -690,10 +694,12 @@ async def _ping_single_model(
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
+            # Моделі gpt-5 і o-серії відхиляють max_tokens, тому для OpenAI потрібен max_completion_tokens
+            token_field = "max_completion_tokens" if provider == "openai" else "max_tokens"
             resp = await client.post(
                 f"{url_base}/chat/completions",
                 headers=headers,
-                json={"model": api_model_name, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
+                json={"model": api_model_name, "messages": [{"role": "user", "content": "ping"}], token_field: 1},
                 timeout=8.0,
             )
     except Exception as exc:
@@ -746,7 +752,7 @@ async def test_custom_model_connection(
         "message": msg,
         "limits": lim,
         "checked_at": now_str,
-        "checked_ago": format_checked_ago_uk(now_str),
+        "checked_ago_uk": format_checked_ago_uk(now_str),
     }
 
 
@@ -847,7 +853,7 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "latency_ms": st_row.get("latency_ms"),
             "error": st_row.get("message") or "",
             "checked_at": checked_at,
-            "checked_ago": format_checked_ago_uk(checked_at),
+            "checked_ago_uk": format_checked_ago_uk(checked_at),
             "context_in": r.get("context_window") or 128000,
             "context_out": lim.get("output_limit") or 8192,
             "price_in": float(in_p) if price_known else None,
@@ -920,10 +926,10 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "status": p_status,
             "status_label": get_status_label_uk(p_status),
             "configured": keys_present.get(pid, True),
-            "models_total": len(p_models),
+            "models_count": len(p_models),
             "enabled_count": len(enabled_models),
             "checked_at": latest_check,
-            "checked_ago": format_checked_ago_uk(latest_check),
+            "checked_ago_uk": format_checked_ago_uk(latest_check),
             "error": cached_prov.get("error") or "",
             "account": cached_prov.get("account"),
             "latency_ms": cached_prov.get("latency_ms"),

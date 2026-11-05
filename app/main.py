@@ -1111,13 +1111,13 @@ async def api_refresh_models_status(payload: Optional[RefreshStatusRequest] = Bo
 @app.post("/api/models/custom/test")
 async def api_test_custom_model(payload: CustomModelTestRequest):
     """Перевіряє з'єднання для власної OpenAI-сумісної моделі перед додаванням."""
-    key_val = payload.api_key or (get_env_secret(payload.api_key_env) if payload.api_key_env else "")
-    res = await test_custom_model_connection(
-        base_url=payload.base_url,
+    return await test_custom_model_connection(
+        provider=payload.provider,
         model_id=payload.model_id,
-        api_key=key_val,
+        base_url=payload.base_url or "",
+        api_key_env=payload.api_key_env or "",
+        api_key_value=payload.api_key or payload.api_key_value,
     )
-    return res
 
 
 @app.post("/api/models/custom")
@@ -1162,11 +1162,12 @@ async def api_add_custom_model(payload: CustomModelCreateRequest):
         }
     )
 
-    key_val = payload.api_key or (get_env_secret(entry["api_key_env"]) if entry.get("api_key_env") else "")
     test_res = await test_custom_model_connection(
-        base_url=entry.get("base_url") or "https://api.openai.com/v1",
+        provider=provider,
         model_id=raw_model_id,
-        api_key=key_val,
+        base_url=entry.get("base_url") or "https://api.openai.com/v1",
+        api_key_env=entry.get("api_key_env") or "",
+        api_key_value=payload.api_key,
     )
     upsert_model_status(
         model_key=registry_id,

@@ -749,14 +749,11 @@ def test_stage2_scheduler_backoff_retry_after_and_paused_quota():
 def test_stage2_custom_model_add_and_mock_connection():
     client = TestClient(app)
 
-    fake_test_ok = {
-        "status": "ok",
-        "status_label": "Працює",
-        "http_code": 200,
-        "latency_ms": 42.5,
-        "message": "Модель відповідає",
-    }
-    with patch("app.main.test_custom_model_connection", new=AsyncMock(return_value=fake_test_ok)):
+    import httpx
+
+    # Підміняється лише мережевий рівень: сама перевірка підключення виконується по-справжньому
+    http_stub = AsyncMock(return_value=httpx.Response(200, json={"choices": []}))
+    with patch("httpx.AsyncClient.post", new=http_stub):
         r_test = client.post(
             "/api/models/custom/test",
             json={
@@ -767,6 +764,9 @@ def test_stage2_custom_model_add_and_mock_connection():
         )
         assert r_test.status_code == 200
         assert r_test.json()["status"] == "ok"
+        sent_url = http_stub.call_args.args[0]
+        assert sent_url == "http://localhost:8080/v1/chat/completions"
+        assert http_stub.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-test-local"
 
         r_add = client.post(
             "/api/models/custom",
@@ -1241,3 +1241,42 @@ def test_status_classifier_on_realistic_provider_error_bodies():
     assert classify("groq", 429, tpm)[0] == "rate_limited"
     assert classify("openrouter", 429, {"error": {"code": 429, "message": "Rate limit exceeded: free-models-per-day"}})[0] == "daily_quota"
     assert classify("gemini", 404, None, raw_text="")[0] == "model_missing"
+
+
+def test_classifier_does_not_call_unknown_errors_a_missing_model():
+    from app.services.model_discovery import classify_api_response as classify
+    # 400 з невідомим текстом не доводить, що моделі немає
+    assert classify("openai", 400, {"error": {"message": "Unsupported parameter: max_tokens"}})[0] == "unchecked"
+    assert classify("groq", 422, None, raw_text="validation error")[0] == "unchecked"
+    # перевантаження сервера не є лімітом користувача
+    assert classify("anthropic", 529, {"error": {"type": "overloaded_error", "message": "Overloaded"}})[0] == "offline"
+    assert classify("openai", 503, None, raw_text="Service Unavailable")[0] == "offline"
+    assert classify("gemini", 400, {"error": {"status": "INVALID_ARGUMENT", "message": "API key expired. Please renew the API key."}})[0] == "invalid_key"
+    # справжні випадки лишаються як були
+    assert classify("openai", 404, {"error": {"code": "model_not_found"}})[0] == "model_missing"
+    assert classify("openai", 429, {"error": {"message": "Rate limit reached"}})[0] == "rate_limited"
+
+
+def test_openai_ping_uses_max_completion_tokens():
+    import httpx
+    from app.services.model_discovery import _ping_single_model
+    stub = AsyncMock(return_value=httpx.Response(200, json={"choices": []}))
+
+    async def run(provider):
+        with patch("httpx.AsyncClient.post", new=stub):
+            async with httpx.AsyncClient() as client:
+                await _ping_single_model(client=client, provider=provider, api_model_name="m", api_key="k", base_url="")
+
+    asyncio.run(run("openai"))
+    assert "max_completion_tokens" in stub.call_args.kwargs["json"] and "max_tokens" not in stub.call_args.kwargs["json"]
+    asyncio.run(run("groq"))
+    assert "max_tokens" in stub.call_args.kwargs["json"]
+
+
+def test_models_snapshot_uses_field_names_the_interface_reads():
+    from app.services.model_discovery import get_models_status_snapshot
+    snap = get_models_status_snapshot()
+    provider = next(iter(snap["providers"].values()))
+    assert "checked_ago_uk" in provider and "models_count" in provider
+    model = next(iter(snap["models"].values()))
+    assert "checked_ago_uk" in model
