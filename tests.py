@@ -1607,3 +1607,81 @@ def test_paraphrase_shares_the_gold_fragment_and_distractors_make_search_harder(
     conn.execute("DELETE FROM kb_documents WHERE doc_code = ?", (distractor,))
     conn.commit()
     conn.close()
+
+
+def test_faq_parsing_formats_and_limits():
+    from app.services.kb_drafts import parse_faq
+    as_json = '{"items": [{"question": "Як змінити пароль?", "answer": "У налаштуваннях профілю оберіть Змінити пароль."}]}'
+    assert parse_faq(as_json, "json")[0]["question"] == "Як змінити пароль?"
+    as_csv = "question,answer\nЯк скасувати замовлення?,Скасування доступне до передачі в доставку.\n"
+    assert parse_faq(as_csv, "csv")[0]["answer"].startswith("Скасування")
+    as_text = "Питання: Як отримати чек?\nВідповідь: Чек надсилається на пошту після оплати.\n\nQ: Де історія платежів?\nA: У розділі Платежі за останні 12 місяців."
+    items = parse_faq(as_text, "text")
+    assert len(items) == 2 and items[0]["question"] == "Як отримати чек?" and items[1]["answer"].startswith("У розділі")
+    with pytest.raises(ValueError):
+        parse_faq("x" * 300_000, "text")
+    with pytest.raises(ValueError):
+        parse_faq("порожньо без пар", "text")
+
+
+def test_faq_import_creates_domain_with_drafts_that_stay_out_of_series_until_approved():
+    from app.services import kb_drafts
+    from app.database import fetch_all_queries, fetch_kb_chunks, fetch_all_domains, get_connection
+    items = [{"question": "Як змінити тариф?", "answer": "Тариф змінюється у розділі Послуги за 2 робочі дні після заяви."}]
+    with pytest.raises(ValueError):
+        kb_drafts.import_faq("Bad Code!", "Назва", "", items)
+    result = kb_drafts.import_faq("legal_faq", "Юридична підтримка", "ЮрСервіс", items)
+    assert result["imported"] == 1
+    domain = next(d for d in fetch_all_domains() if d["code"] == "legal_faq")
+    assert "шахрайств" not in domain["escalation_rules"]                  # правила не успадковані від фінтеху
+    assert fetch_all_queries(domain="legal_faq", reviewed_only=True) == []
+    assert fetch_kb_chunks("legal_faq") == []
+    code = fetch_all_queries(domain="legal_faq")[0]["code"]
+    assert kb_drafts.list_drafts("legal_faq")["queries"][0]["code"] == code
+    kb_drafts.review_draft("query", code, "approve", text="Як змінити тарифний план?")
+    approved = fetch_all_queries(domain="legal_faq", reviewed_only=True)
+    assert approved[0]["user_query"] == "Як змінити тарифний план?"
+    assert [c["code"] for c in fetch_kb_chunks("legal_faq")] == [code]    # відповідь стала доступна пошуку
+    conn = get_connection()
+    conn.execute("DELETE FROM queries WHERE domain = 'legal_faq'")
+    conn.execute("DELETE FROM kb_documents WHERE domain = 'legal_faq'")
+    conn.execute("DELETE FROM domains WHERE code = 'legal_faq'")
+    conn.commit()
+    conn.close()
+
+
+def test_generated_distractors_and_paraphrases_are_drafts_and_can_be_rejected():
+    from app.services import kb_drafts
+    from app.database import fetch_all_queries, fetch_kb_chunks
+    answers = [
+        {"generated_answer": json.dumps({"items": [{"title": "Виняток", "text": "Переказ понад ліміт потребує додаткового підтвердження у відділенні."}]}, ensure_ascii=False)},
+        None,
+    ]
+    base = next(q for q in fetch_all_queries(domain="fintech", reviewed_only=True) if not q.get("variant_of"))
+    answers[1] = {"generated_answer": json.dumps({"items": [{"code": base["code"], "paraphrase": "підкажіть швидко, " + base["user_query"].lower()}]}, ensure_ascii=False)}
+    stub = AsyncMock(side_effect=answers)
+    with patch("app.services.kb_drafts.execute_llm_request", stub):
+        assert asyncio.run(kb_drafts.generate_distractors("fintech", 1, "m")) == 1
+        created = asyncio.run(kb_drafts.generate_paraphrases("fintech", 1, "m"))
+    assert created == 1
+    drafts = kb_drafts.list_drafts("fintech")
+    doc = next(d for d in drafts["documents"] if "ліміт" in d["text"])
+    variant = next(q for q in drafts["queries"] if q["code"] == base["code"] + "-V1")
+    assert doc["doc_code"] not in {c["code"] for c in fetch_kb_chunks("fintech")}
+    kb_drafts.review_draft("document", doc["doc_code"], "approve")
+    assert doc["doc_code"] in {c["code"] for c in fetch_kb_chunks("fintech")}
+    kb_drafts.review_draft("document", doc["doc_code"], "reject")
+    kb_drafts.review_draft("query", variant["code"], "reject")
+    leftovers = kb_drafts.list_drafts("fintech")
+    assert not any(d["doc_code"] == doc["doc_code"] for d in leftovers["documents"])
+    assert variant["code"] not in {q["code"] for q in fetch_all_queries()}
+
+
+def test_kb_endpoints_validate_input():
+    client = TestClient(app)
+    assert client.post("/api/kb/import-faq", json={"domain_code": "ab", "domain_name": "Назва", "content": "достатньо довгий текст"}).status_code == 422
+    bad = client.post("/api/kb/import-faq", json={"domain_code": "Bad Code!", "domain_name": "Назва", "format": "text", "content": "Питання: Що?\nВідповідь: Це довга відповідь."})
+    assert bad.status_code == 400
+    assert client.post("/api/kb/review", json={"kind": "query", "key": "NOPE", "action": "explode"}).status_code == 400
+    summary = client.get("/api/kb/summary").json()["items"]
+    assert {s["domain"] for s in summary} >= {"fintech", "telecom"} and all("queries_draft" in s for s in summary)

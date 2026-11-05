@@ -62,6 +62,9 @@ from app.models import (
     PromptTemplateUpdate,
     SingleAutomationRequest,
     AssistantRequest,
+    FaqImportRequest,
+    KbGenerateRequest,
+    KbReviewRequest,
     CascadeRequest,
     BatchExperimentRequest,
     FlexibleAnalyticsRequest,
@@ -84,6 +87,7 @@ from app.services.analytics import (
 )
 from app.services.analytics import compute_hypotheses_overview
 from app.services.assistant import answer_customer_query
+from app.services import kb_drafts
 from app.services.cascade import simulate_cascade_for_runs
 from app.services.experiment_runner import (
     run_single_automation_pipeline,
@@ -605,6 +609,45 @@ async def api_automate_single(payload: SingleAutomationRequest):
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/kb/import-faq")
+async def api_kb_import_faq(payload: FaqImportRequest):
+    try:
+        items = kb_drafts.parse_faq(payload.content, payload.format)
+        return kb_drafts.import_faq(payload.domain_code, payload.domain_name, payload.company, items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/kb/generate")
+async def api_kb_generate(payload: KbGenerateRequest):
+    try:
+        if payload.kind == "distractors":
+            return {"created": await kb_drafts.generate_distractors(payload.domain, payload.count, payload.model_id)}
+        if payload.kind == "paraphrases":
+            return {"created": await kb_drafts.generate_paraphrases(payload.domain, payload.count, payload.model_id)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(status_code=400, detail="kind має бути distractors або paraphrases.")
+
+
+@app.get("/api/kb/drafts")
+async def api_kb_drafts(domain: str = Query(default="all")):
+    return kb_drafts.list_drafts(domain)
+
+
+@app.post("/api/kb/review")
+async def api_kb_review(payload: KbReviewRequest):
+    try:
+        return kb_drafts.review_draft(payload.kind, payload.key, payload.action, payload.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/kb/summary")
+async def api_kb_summary():
+    return {"items": kb_drafts.kb_summary()}
 
 
 @app.post("/api/assistant/ask")

@@ -514,7 +514,7 @@ def upsert_domain(data: Dict[str, Any]) -> Dict[str, Any]:
     description_uk = str(data.get("description_uk") or "").strip()
     escalation_rules = str(
         data.get("escalation_rules")
-        or "підозра на шахрайство, компрометація облікового запису, несанкціоноване списання коштів, юридична претензія або відсутність потрібних даних у базі знань"
+        or "запит стосується безпеки облікового запису або конфіденційних даних, містить юридичну претензію, вимагає дій, яких немає в базі знань, або потрібної відповіді в базі знань немає"
     ).strip()
     risk_profile_uk = str(data.get("risk_profile_uk") or "").strip()
     default_preset = str(data.get("default_preset") or "balanced").strip()

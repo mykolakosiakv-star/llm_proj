@@ -183,3 +183,25 @@ class FlexibleAnalyticsRequest(BaseModel):
     domains: Optional[List[str]] = Field(default=None)
     balanced_only: bool = Field(default=True)
     include_self_judged: bool = Field(default=False)
+
+
+class FaqImportRequest(BaseModel):
+    domain_code: str = Field(..., min_length=3, max_length=31)
+    domain_name: str = Field(..., min_length=2, max_length=120)
+    company: str = Field(default="", max_length=120)
+    format: str = Field(default="text", description="json, csv або text")
+    content: str = Field(..., min_length=10)
+
+
+class KbGenerateRequest(BaseModel):
+    domain: str
+    kind: str = Field(..., description="distractors або paraphrases")
+    count: int = Field(default=10, ge=1, le=30)
+    model_id: str
+
+
+class KbReviewRequest(BaseModel):
+    kind: str = Field(..., description="query або document")
+    key: str
+    action: str = Field(..., description="approve або reject")
+    text: str = Field(default="")
