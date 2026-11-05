@@ -12,9 +12,15 @@ from typing import List, Dict, Any, Optional
 from app.config import DB_PATH, BASE_DIR
 
 
+# Версія схеми зберігається в PRAGMA user_version. Міграції лишаються адитивними (_ensure_column, CREATE IF NOT EXISTS)
+SCHEMA_VERSION = 2
+
+
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    # Зовнішні ключі в SQLite вмикаються окремо для кожного з'єднання
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -239,6 +245,7 @@ def init_db() -> None:
         ("call_ms", "REAL NOT NULL DEFAULT 0.0"),
         ("wall_ms", "REAL NOT NULL DEFAULT 0.0"),
         ("source", "TEXT NOT NULL DEFAULT 'batch'"),
+        ("query_code", "TEXT NOT NULL DEFAULT ''"),
         ("rouge_l_f1_pct", "REAL NOT NULL DEFAULT 0.0"),
         ("stem_cosine_pct", "REAL NOT NULL DEFAULT 0.0"),
         ("embedding_available", "INTEGER NOT NULL DEFAULT 0"),
@@ -385,11 +392,18 @@ def init_db() -> None:
         """
     )
 
+    # Складені індекси під запити аналітики й перегляду замірів; поодинокі індекси за model, prompt, category
+    # мали низьку вибірковість і більше не потрібні
+    for obsolete in ("idx_eval_model", "idx_eval_prompt", "idx_eval_category", "idx_eval_context_mode"):
+        cur.execute(f"DROP INDEX IF EXISTS {obsolete}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_run ON evaluation_results(run_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_model ON evaluation_results(model_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_prompt ON evaluation_results(prompt_code)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_category ON evaluation_results(category)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_context_mode ON evaluation_results(context_mode)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_eval_run_cell ON evaluation_results(run_id, model_id, prompt_code, query_code)"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_run_source ON evaluation_results(run_id, source)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_eval_query ON evaluation_results(query_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_mode_status ON experiment_runs(execution_mode, status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_queries_domain_category ON queries(domain, category)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_run_errors_run ON run_errors(run_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_model_reg_provider ON model_registry(provider)")
 
@@ -401,7 +415,11 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
+    # WAL дозволяє читати інтерфейсу, поки фонова серія пише результати; режим зберігається у файлі бази
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.close()
 
 
@@ -489,7 +507,7 @@ def fetch_all_queries(category: Optional[str] = None, domain: Optional[str] = No
         sql += " AND category = ?"
         params.append(category)
     if domain and domain != "all":
-        sql += " AND COALESCE(domain, 'fintech') = ?"
+        sql += " AND domain = ?"
         params.append(domain)
     sql += " ORDER BY id ASC"
     cur.execute(sql, tuple(params))

@@ -647,7 +647,7 @@ async def api_list_experiments():
                (SELECT COUNT(*) FROM evaluation_results er WHERE er.run_id = r.id) AS actual_items_count,
                (SELECT COUNT(*) FROM evaluation_results er WHERE er.run_id = r.id AND COALESCE(er.rubric_evaluated, 0) = 1) AS judged_items_count
         FROM experiment_runs r
-        WHERE COALESCE(r.execution_mode, 'live_api') != 'sandbox'
+        WHERE r.execution_mode != 'sandbox'
         ORDER BY r.id DESC
         """
     )
@@ -860,7 +860,7 @@ async def api_get_experiment_items(
         SELECT e.*, q.user_query, q.reference_answer, q.expected_escalation
         FROM evaluation_results e
         LEFT JOIN queries q ON e.query_id = q.id
-        WHERE e.run_id = ? AND COALESCE(e.source, 'batch') != 'sandbox'
+        WHERE e.run_id = ? AND e.source != 'sandbox'
     """
     params = [run_id]
     if model_id and model_id != "all":

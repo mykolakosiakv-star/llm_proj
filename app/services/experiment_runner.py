@@ -1654,7 +1654,7 @@ async def evaluate_run_with_judge(
         conn.close()
         raise RuntimeError(f"Серію #{run_id} не знайдено.")
 
-    sql = "SELECT * FROM evaluation_results WHERE run_id = ? AND COALESCE(source, 'batch') != 'sandbox'"
+    sql = "SELECT * FROM evaluation_results WHERE run_id = ? AND source != 'sandbox'"
     if only_unjudged:
         sql += " AND COALESCE(rubric_evaluated, 0) = 0"
     sql += " ORDER BY id ASC"

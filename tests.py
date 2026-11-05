@@ -1413,3 +1413,19 @@ def test_ping_timeout_gets_a_readable_message():
                 return await _ping_single_model(client=client, provider="gemini", api_model_name="m", api_key="k", base_url="")
     status, code, _, message, _ = asyncio.run(run())
     assert status == "offline" and code is None and "очікування" in message
+
+
+def test_database_pragmas_indexes_and_schema_version():
+    conn = db_module.get_connection()
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db_module.SCHEMA_VERSION
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert {"idx_eval_run_cell", "idx_eval_run_source", "idx_runs_mode_status", "idx_queries_domain_category"} <= names
+        assert "idx_eval_model" not in names
+        plan = " ".join(str(tuple(r)) for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM queries WHERE domain = ? AND category = ?", ("fintech", "informational")))
+        assert "idx_queries_domain_category" in plan
+    finally:
+        conn.close()

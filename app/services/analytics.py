@@ -1230,7 +1230,7 @@ def export_manual_validation_sample_csv(
         SELECT e.*, q.user_query, q.context_fact, q.reference_answer, q.domain
         FROM evaluation_results e
         LEFT JOIN queries q ON e.query_id = q.id
-        WHERE e.run_id = ? AND COALESCE(e.source, 'batch') != 'sandbox'
+        WHERE e.run_id = ? AND e.source != 'sandbox'
         ORDER BY e.id ASC
         """,
         (run_id,),
