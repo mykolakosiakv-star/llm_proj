@@ -1562,6 +1562,7 @@ def test_hypotheses_overview_endpoint_reports_no_data_honestly():
     body = res.json()
     # у чистій базі завершених серій немає, висновків теж
     assert body["available"] is False and body["runs"] == 0
+    assert body["criteria"]["min_queries"] == 30      # пороги показуються й тоді, коли висновків ще немає
 
 
 def test_every_query_has_a_gold_fragment_in_the_knowledge_base():
@@ -1725,3 +1726,10 @@ def test_audit_flags_duplicates_and_queries_that_copy_their_answer():
     result = inspect_dataset_audit(queries)
     assert result["duplicates"] == [["A1", "A2"]]
     assert [code for code, _ in result["leaky_queries"]] == ["A3"]
+
+
+def test_hypotheses_payload_exposes_the_criteria_used_for_verdicts():
+    from app.services.hypotheses import assess_hypotheses, MIN_CELL_QUERIES, PRACTICAL_GAP_PTS
+    res = assess_hypotheses([], [], [], {}, [], n_queries=0)
+    assert res["criteria"] == {"min_queries": 30, "min_cell_queries": MIN_CELL_QUERIES,
+                               "practical_gap_pts": PRACTICAL_GAP_PTS, "quality_tolerance_pts": 5.0}

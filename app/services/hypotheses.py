@@ -145,6 +145,16 @@ def assess_h3(by_model: List[Dict[str, Any]], n_queries: int) -> Dict[str, Any]:
     return _finalize("H3", "not_supported", summary, evidence, n_queries)
 
 
+def verdict_criteria() -> Dict[str, float]:
+    """Пороги, за якими видається вердикт. Їх показує інтерфейс, щоб пояснення не розходилося з розрахунком."""
+    return {
+        "min_queries": MIN_QUERIES_FOR_CONCLUSION,
+        "min_cell_queries": MIN_CELL_QUERIES,
+        "practical_gap_pts": PRACTICAL_GAP_PTS,
+        "quality_tolerance_pts": QUALITY_TOLERANCE_PTS,
+    }
+
+
 def assess_hypotheses(
     by_model: List[Dict[str, Any]],
     by_prompt: List[Dict[str, Any]],
@@ -158,6 +168,7 @@ def assess_hypotheses(
     return {
         "n_queries": n_queries,
         "min_queries": MIN_QUERIES_FOR_CONCLUSION,
+        "criteria": verdict_criteria(),
         "h1": assess_h1(matrix_model_domain, model_names, domain_names, n_queries),
         "h2": assess_h2(by_model, by_prompt, by_context_mode, n_queries),
         "h3": assess_h3(by_model, n_queries),

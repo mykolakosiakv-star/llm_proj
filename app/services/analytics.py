@@ -30,7 +30,7 @@ from app.database import (
 )
 from app.services.prompt_builder import build_prompt_messages
 from app.services.llm_runtime import calculate_cost_usd
-from app.services.hypotheses import assess_hypotheses
+from app.services.hypotheses import assess_hypotheses, verdict_criteria
 from app.services.stats import (
     describe_sample,
     aggregate_repeats_by_query,
@@ -832,12 +832,12 @@ def compute_hypotheses_overview() -> Dict[str, Any]:
     finally:
         conn.close()
     if not run_ids:
-        return {"available": False, "runs": 0}
+        return {"available": False, "runs": 0, "criteria": verdict_criteria()}
     payload = compute_flexible_analytics(run_ids=run_ids, balanced_only=True)
     hypotheses = payload.get("hypotheses")
     if not hypotheses:
-        return {"available": False, "runs": len(run_ids)}
-    return {"available": True, "runs": len(run_ids), "hypotheses": hypotheses}
+        return {"available": False, "runs": len(run_ids), "criteria": verdict_criteria()}
+    return {"available": True, "runs": len(run_ids), "hypotheses": hypotheses, "criteria": verdict_criteria()}
 
 
 def compute_run_analytics(

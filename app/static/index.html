@@ -93,37 +93,158 @@
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-5 space-y-5">
 
         <!-- ВКЛАДКА: ПОЧАТОК -->
-        <section id="tab-home" class="space-y-8">
+        <section id="tab-home" class="space-y-10 max-w-6xl mx-auto">
             <div class="card-box p-6 space-y-4">
                 <div>
                     <h1 class="text-xl font-semibold text-slate-900">Мовні моделі у службі підтримки</h1>
-                    <p class="text-sm text-slate-600 mt-1 max-w-3xl">
-                        Програма перевіряє, наскільки мовні моделі здатні відповідати на типові запити користувачів, і допомагає вибрати модель під вашу сферу, бюджет і вимоги до безпеки.
+                    <p class="text-sm text-slate-700 mt-2 max-w-3xl">
+                        Програма відповідає на одне практичне питання: яку мовну модель і які налаштування обрати, щоб автоматично відповідати на типові запити клієнтів якісно, безпечно й недорого.
+                        Вона одночасно працює як помічник для служби підтримки і як стенд, що вимірює, наскільки такий помічник ефективний.
                     </p>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="border border-slate-200 rounded-lg p-4">
-                        <div class="text-sm font-semibold text-slate-900">Автоматизація відповідей</div>
-                        <p class="text-sm text-slate-600 mt-1">Вкладка «Помічник». Запит клієнта проходить конвеєр: пошук у базі знань, відповідь моделі, рішення, чи потрібен оператор. Цим користується служба підтримки.</p>
-                    </div>
-                    <div class="border border-slate-200 rounded-lg p-4">
-                        <div class="text-sm font-semibold text-slate-900">Дослідження ефективності</div>
-                        <p class="text-sm text-slate-600 mt-1">Вкладки «Експерименти» і «Результати». Той самий конвеєр запускається на наборі типових запитів, вимірюються якість, безпека й вартість, а результат порівнюється з гіпотезами нижче.</p>
-                    </div>
+                <div class="flex flex-wrap gap-2 text-sm" id="homeToc">
+                    <button onclick="homeScrollTo('home-flow')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Як це працює</button>
+                    <button onclick="homeScrollTo('home-hypotheses')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Гіпотези</button>
+                    <button onclick="homeScrollTo('home-prompts')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Промпти та контекст</button>
+                    <button onclick="homeScrollTo('home-metrics')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Що вимірюється</button>
+                    <button onclick="homeScrollTo('home-tabs')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Вкладки програми</button>
+                    <button onclick="homeScrollTo('home-steps')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">З чого почати</button>
                 </div>
             </div>
 
-            <section class="space-y-3">
+            <section id="home-flow" class="space-y-3">
                 <div>
-                    <h2 class="font-semibold text-slate-900 text-lg">Гіпотези дослідження</h2>
-                    <p class="text-sm text-slate-600">Висновок з'являється, лише коли запитів достатньо. Докладні дані на вкладці «Результати».</p>
+                    <h2 class="font-semibold text-slate-900 text-lg">Як це працює</h2>
+                    <p class="text-sm text-slate-600">Кожен запит клієнта проходить один і той самий конвеєр із чотирьох кроків.</p>
                 </div>
-                <div id="homeHypotheses" class="grid grid-cols-1 lg:grid-cols-3 gap-3"></div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div class="card-box p-4">
+                        <div class="text-xs text-slate-500">Крок 1</div>
+                        <div class="text-sm font-semibold text-slate-900 mt-1">Запит клієнта</div>
+                        <p class="text-sm text-slate-600 mt-1">Наприклад: «Як відкрити віртуальну картку?». Визначається категорія: інформаційний, навігаційний, процедурний, проблемний або уточнювальний запит.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-xs text-slate-500">Крок 2</div>
+                        <div class="text-sm font-semibold text-slate-900 mt-1">Пошук у базі знань</div>
+                        <p class="text-sm text-slate-600 mt-1">Система знаходить три найбільш підхожі фрагменти бази знань обраної сфери. Пошук враховує українську морфологію.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-xs text-slate-500">Крок 3</div>
+                        <div class="text-sm font-semibold text-slate-900 mt-1">Відповідь моделі</div>
+                        <p class="text-sm text-slate-600 mt-1">Модель отримує запит, знайдені фрагменти та інструкцію (промпт) і повертає відповідь у єдиному форматі: текст, рішення про передачу оператору та причину.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-xs text-slate-500">Крок 4</div>
+                        <div class="text-sm font-semibold text-slate-900 mt-1">Рішення</div>
+                        <p class="text-sm text-slate-600 mt-1">Відповісти клієнтові автоматично або передати запит оператору. Передача обов'язкова, коли йдеться про безпеку, гроші чи юридичні вимоги, або коли в базі знань немає відповіді.</p>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="border border-slate-200 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-slate-900">Автоматизація відповідей</div>
+                        <p class="text-sm text-slate-600 mt-1">Вкладка «Помічник» виконує цей конвеєр для одного запиту. Нею користується співробітник служби підтримки: отримує готову відповідь, джерела та підказку, чи потрібен оператор.</p>
+                    </div>
+                    <div class="border border-slate-200 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-slate-900">Дослідження ефективності</div>
+                        <p class="text-sm text-slate-600 mt-1">Вкладки «Експерименти» і «Результати» запускають той самий конвеєр на сотнях типових запитів, вимірюють якість, безпеку й вартість і порівнюють моделі та налаштування. Результат перевіряється гіпотезами нижче.</p>
+                    </div>
+                </div>
             </section>
 
-            <section class="space-y-3">
-                <h2 class="font-semibold text-slate-900 text-lg">З чого почати</h2>
-                <div id="homeTasks" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+            <section id="home-hypotheses" class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">Гіпотези дослідження</h2>
+                    <p id="homeCriteriaNote" class="text-sm text-slate-600"></p>
+                </div>
+                <div id="homeHypotheses" class="space-y-4"></div>
+                <div class="border border-slate-200 rounded-lg p-4">
+                    <div class="text-sm font-semibold text-slate-900">Головний практичний результат: каскад</div>
+                    <p class="text-sm text-slate-600 mt-1">
+                        Прості запити отримує дешева модель. Якщо вона сама просить допомоги, запит переходить до сильнішої моделі, а якщо й та не впевнена, до оператора. Ризикові категорії можна одразу віддавати сильній моделі.
+                        Економія й вплив на безпеку розраховуються на вже зібраних результатах, без нових викликів до моделей: це блок «Каскад» на вкладці «Результати».
+                    </p>
+                </div>
+            </section>
+
+            <section id="home-prompts" class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">Стратегії промптів і режими контексту</h2>
+                    <p class="text-sm text-slate-600">
+                        Промпт це інструкція, яку отримує модель. Усі п'ять стратегій повертають відповідь в однаковому форматі (текст, рішення про оператора, причина), тому відрізняються лише способом подачі інструкції, і їх можна чесно порівнювати.
+                    </p>
+                </div>
+                <div id="homePrompts" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900">Режими контексту (гіпотеза H2)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+                        <div class="card-box p-4">
+                            <div class="text-sm font-semibold text-slate-900">Без контексту</div>
+                            <p class="text-sm text-slate-600 mt-1">Модель відповідає лише зі своїх знань. Нижня межа: показує, що дає сама модель.</p>
+                        </div>
+                        <div class="card-box p-4">
+                            <div class="text-sm font-semibold text-slate-900">Пошук у базі знань</div>
+                            <p class="text-sm text-slate-600 mt-1">Система сама знаходить фрагменти. Це режим реальної роботи, саме він відповідає автоматизації.</p>
+                        </div>
+                        <div class="card-box p-4">
+                            <div class="text-sm font-semibold text-slate-900">Еталонний контекст</div>
+                            <p class="text-sm text-slate-600 mt-1">Модель одразу отримує правильний фрагмент. Найкращий можливий випадок: різниця з пошуком показує, скільки якості втрачається на пошуку.</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-sm text-slate-600">Тексти інструкцій можна переглянути й змінити на вкладці «Дані». Кожна зміна створює нову версію шаблону, тому раніше проведені серії лишаються відтворюваними.</p>
+            </section>
+
+            <section id="home-metrics" class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">Що вимірюється</h2>
+                    <p class="text-sm text-slate-600">Програма не зводить усе до одного числа: якість, безпека, вартість і швидкість показуються окремо, бо від їхнього співвідношення залежить вибір.</p>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Якість відповіді</div>
+                        <p class="text-sm text-slate-600 mt-1">За замовчуванням підсумок із трьох частин: повнота фактів (65%), схожість до еталонної відповіді (35%) і штраф 15 пунктів за галюцинації.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Повнота фактів</div>
+                        <p class="text-sm text-slate-600 mt-1">Яку частину обов'язкових фактів (суми, терміни, кроки) відповідь містить.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Галюцинації</div>
+                        <p class="text-sm text-slate-600 mt-1">Частка відповідей, де модель назвала число або факт, якого немає в базі знань.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Передача оператору</div>
+                        <p class="text-sm text-slate-600 mt-1">Чи правильно модель вирішила, що запит потребує людини. Найнебезпечніша помилка: пропущена передача, коли модель відповіла сама там, де треба було оператора.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Вартість і швидкість</div>
+                        <p class="text-sm text-slate-600 mt-1">Ціна за запит і за 1000 запитів за тарифами моделі, час відповіді. Якщо ціну не задано, вона не вважається нульовою.</p>
+                    </div>
+                    <div class="card-box p-4">
+                        <div class="text-sm font-semibold text-slate-900">Оцінка суддею</div>
+                        <p class="text-sm text-slate-600 mt-1">Незалежна модель оцінює відповідь за рубрикою. Оцінки перевіряються на ручній розмітці, щоб було видно, чи можна їм довіряти.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="home-tabs" class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">Вкладки програми</h2>
+                    <p class="text-sm text-slate-600">Що де знаходиться.</p>
+                </div>
+                <div id="homeTabs" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+            </section>
+
+            <section id="home-steps" class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">З чого почати</h2>
+                    <p class="text-sm text-slate-600">П'ять кроків від підключення моделей до висновків. Позначки показують, що вже зроблено.</p>
+                </div>
+                <ol id="homeSteps" class="space-y-2"></ol>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 mt-4">Або оберіть свою задачу</h3>
+                    <div id="homeTasks" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-2"></div>
+                </div>
             </section>
 
             <section class="space-y-2">
