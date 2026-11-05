@@ -1553,3 +1553,12 @@ def test_h3_needs_a_cheaper_model_that_is_not_less_safe():
     # ціни немає: невідома ціна не вважається нулем
     assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 83, 0.0, known=False)], 60)["verdict"] == "insufficient"
     assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 83, 0.5)], 12)["verdict"] == "insufficient"
+
+
+def test_hypotheses_overview_endpoint_reports_no_data_honestly():
+    client = TestClient(app)
+    res = client.get("/api/hypotheses")
+    assert res.status_code == 200
+    body = res.json()
+    # у чистій базі завершених серій немає, висновків теж
+    assert body["available"] is False and body["runs"] == 0

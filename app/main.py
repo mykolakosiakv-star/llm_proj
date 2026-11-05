@@ -82,6 +82,7 @@ from app.services.analytics import (
     export_manual_validation_sample_csv,
     import_manual_validation_csv,
 )
+from app.services.analytics import compute_hypotheses_overview
 from app.services.assistant import answer_customer_query
 from app.services.cascade import simulate_cascade_for_runs
 from app.services.experiment_runner import (
@@ -825,6 +826,11 @@ async def api_get_experiment_analytics(
 async def api_get_experiment_errors(run_id: int):
     """Повертає журнал помилок (run_errors), що виникли під час виконання серії експериментів."""
     return {"run_id": run_id, "errors": fetch_run_errors(run_id)}
+
+
+@app.get("/api/hypotheses")
+async def api_hypotheses_overview():
+    return compute_hypotheses_overview()
 
 
 @app.post("/api/analytics/flexible")

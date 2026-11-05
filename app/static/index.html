@@ -28,7 +28,10 @@
             </div>
 
             <nav class="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                <button onclick="switchTab('sandbox')" id="tabBtn-sandbox" class="nav-pill active px-3 py-1.5 rounded-lg text-xs font-medium">
+                <button onclick="switchTab('home')" id="tabBtn-home" class="nav-pill active px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Початок
+                </button>
+                <button onclick="switchTab('sandbox')" id="tabBtn-sandbox" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
                     Помічник
                 </button>
                 <button onclick="switchTab('experiments')" id="tabBtn-experiments" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
@@ -38,10 +41,10 @@
                     Результати
                 </button>
                 <button onclick="switchTab('dataset')" id="tabBtn-dataset" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
-                    Набори даних і промпти
+                    Дані
                 </button>
                 <button onclick="switchTab('settings')" id="tabBtn-settings" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
-                    Провайдери і моделі
+                    Моделі
                 </button>
                 <button onclick="switchTab('logs')" id="tabBtn-logs" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5">
                     <span>Журнал</span>
@@ -55,7 +58,7 @@
         </div>
     </header>
 
-    <div id="liveStatusBanner" class="bg-slate-900 text-white border-b border-slate-800">
+    <div id="liveStatusBanner" class="hidden bg-slate-900 text-white border-b border-slate-800">
         <div class="max-w-7xl mx-auto px-4 py-2 space-y-1.5">
             <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div class="flex items-center gap-2">
@@ -89,8 +92,48 @@
 
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-5 space-y-5">
 
+        <!-- ВКЛАДКА: ПОЧАТОК -->
+        <section id="tab-home" class="space-y-8">
+            <div class="card-box p-6 space-y-4">
+                <div>
+                    <h1 class="text-xl font-semibold text-slate-900">Мовні моделі у службі підтримки</h1>
+                    <p class="text-sm text-slate-600 mt-1 max-w-3xl">
+                        Програма перевіряє, наскільки мовні моделі здатні відповідати на типові запити користувачів, і допомагає вибрати модель під вашу сферу, бюджет і вимоги до безпеки.
+                    </p>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="border border-slate-200 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-slate-900">Автоматизація відповідей</div>
+                        <p class="text-sm text-slate-600 mt-1">Вкладка «Помічник». Запит клієнта проходить конвеєр: пошук у базі знань, відповідь моделі, рішення, чи потрібен оператор. Цим користується служба підтримки.</p>
+                    </div>
+                    <div class="border border-slate-200 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-slate-900">Дослідження ефективності</div>
+                        <p class="text-sm text-slate-600 mt-1">Вкладки «Експерименти» і «Результати». Той самий конвеєр запускається на наборі типових запитів, вимірюються якість, безпека й вартість, а результат порівнюється з гіпотезами нижче.</p>
+                    </div>
+                </div>
+            </div>
+
+            <section class="space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-lg">Гіпотези дослідження</h2>
+                    <p class="text-sm text-slate-600">Висновок з'являється, лише коли запитів достатньо. Докладні дані на вкладці «Результати».</p>
+                </div>
+                <div id="homeHypotheses" class="grid grid-cols-1 lg:grid-cols-3 gap-3"></div>
+            </section>
+
+            <section class="space-y-3">
+                <h2 class="font-semibold text-slate-900 text-lg">З чого почати</h2>
+                <div id="homeTasks" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+            </section>
+
+            <section class="space-y-2">
+                <h2 class="font-semibold text-slate-900 text-lg">Поточний стан</h2>
+                <ul id="homeStatus" class="text-sm text-slate-700 space-y-1 list-disc pl-5"></ul>
+            </section>
+        </section>
+
         <!-- ВКЛАДКА: ПОМІЧНИК -->
-        <section id="tab-sandbox" class="space-y-5">
+        <section id="tab-sandbox" class="hidden space-y-5">
             <div class="card-box p-5 space-y-4 max-w-3xl">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-base">Помічник служби підтримки</h2>
@@ -229,7 +272,7 @@
                             <div id="sandboxPromptStrategyDesc" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700"></div>
                         </div>
 
-                        <button onclick="runSandboxPipeline()" id="runSandboxBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-sm transition">
+                        <button onclick="runSandboxPipeline()" id="runSandboxBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition">
                             Виконати запит
                         </button>
                     </div>
@@ -275,7 +318,7 @@
                                 <p class="text-xs text-slate-500">Автоматичний розрахунок метрик за фактами та структурою</p>
                             </div>
                             <div class="text-right">
-                                <span class="text-[11px] text-slate-500 block">Композит Q<sub>det</sub></span>
+                                <span class="text-[11px] text-slate-500 block">Загальна якість</span>
                                 <span id="resIntegralScoreBig" class="text-2xl font-extrabold text-blue-600">-%</span>
                             </div>
                         </div>
@@ -309,6 +352,25 @@
                         </button>
                     </div>
 
+                    <div class="space-y-2">
+                        <div class="text-xs font-medium text-slate-700">Що перевіряємо</div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <button type="button" onclick="applyExperimentPreset('h1')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
+                                <div class="font-semibold text-slate-900">H1</div>
+                                <div class="text-slate-600">Залежить від сфери</div>
+                            </button>
+                            <button type="button" onclick="applyExperimentPreset('h2')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
+                                <div class="font-semibold text-slate-900">H2</div>
+                                <div class="text-slate-600">Промпт і контекст</div>
+                            </button>
+                            <button type="button" onclick="applyExperimentPreset('h3')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
+                                <div class="font-semibold text-slate-900">H3</div>
+                                <div class="text-slate-600">Чи досить дешевої моделі</div>
+                            </button>
+                        </div>
+                        <p id="expPresetNote" class="text-xs text-slate-500">Оберіть гіпотезу, і параметри серії заповняться під неї. Їх можна змінити нижче.</p>
+                    </div>
+
                     <div id="expErrorBox" class="hidden p-3 rounded-lg bg-rose-50 border border-rose-300 text-rose-800 text-xs font-medium"></div>
 
                     <div class="space-y-3 text-xs sm:text-sm">
@@ -328,7 +390,7 @@
                             </select>
                             <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-700">
                                 <input type="checkbox" id="expEqualDomainSample" checked onchange="updateBatchExperimentEstimate()" class="rounded text-blue-600">
-                                <span>Однакова вибірка по сферах (стратифікований відбір із фіксованим seed)</span>
+                                <span>Однакова кількість запитів у кожній сфері</span>
                             </label>
                             <div id="expDomainRiskDesc" class="mt-1 text-[11px] text-slate-500">
                                 Фінансовий сектор: суворі числові ліміти, тарифи та обов'язкова ескалація при ризиках безпеки.
@@ -362,7 +424,7 @@
                         <div class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block font-semibold text-slate-700 mb-1">Запитів на категорію (1-12):</label>
-                                <input id="expMaxQueriesInput" type="number" min="1" max="12" value="2" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                                <input id="expMaxQueriesInput" type="number" min="1" max="12" value="6" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
                             </div>
                             <div>
                                 <label class="block font-semibold text-slate-700 mb-1">Кількість повторів (1-5):</label>
@@ -372,7 +434,7 @@
 
                         <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
                             <div class="flex flex-wrap items-center justify-between gap-2">
-                                <label class="font-semibold text-slate-700">Режим подачі контексту (Гіпотеза H2):</label>
+                                <label class="font-semibold text-slate-700">Контекст для моделі:</label>
                                 <div class="flex items-center gap-1.5 text-xs">
                                     <span class="text-slate-600">Top-K пошуку:</span>
                                     <input id="expTopKInput" type="number" min="1" max="10" value="3" class="w-14 border border-slate-300 rounded px-2 py-0.5 bg-white text-center font-semibold">
@@ -381,15 +443,15 @@
                             <div id="expContextModesCheckboxes" class="space-y-1 text-xs">
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input type="checkbox" name="expContextMode" value="gold_context" checked class="rounded text-blue-600">
-                                    <span><b>gold_context</b>: еталонний контекст запиту (стеля якості)</span>
+                                    <span><b>Еталонний контекст</b>: найкращий можливий випадок</span>
                                 </label>
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input type="checkbox" name="expContextMode" value="retrieved_context" class="rounded text-blue-600">
-                                    <span><b>retrieved_context</b>: автоматичний пошук BM25 Top-K по базі домену</span>
+                                    <span><b>Пошук у базі знань</b>: те, що буде в роботі</span>
                                 </label>
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input type="checkbox" name="expContextMode" value="no_context" class="rounded text-blue-600">
-                                    <span><b>no_context</b>: без контексту (базова лінія)</span>
+                                    <span><b>Без контексту</b>: нижня межа</span>
                                 </label>
                             </div>
                         </div>
@@ -403,7 +465,7 @@
                             </select>
                             <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-600">
                                 <input type="checkbox" id="expAllowSelfJudge" class="rounded text-indigo-600">
-                                <span>Дозволити самооцінювання (позначатиметься як self_judged=1)</span>
+                                <span>Дозволити моделі оцінювати саму себе</span>
                             </label>
                         </div>
 
@@ -412,7 +474,7 @@
                             <div id="expEstimateContent" class="text-slate-600">Розрахунок обсягу викликів...</div>
                         </div>
 
-                        <button onclick="startNewBatchExperiment()" id="startBatchExpBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm transition">
+                        <button onclick="startNewBatchExperiment()" id="startBatchExpBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition">
                             Запустити серію
                         </button>
                     </div>
@@ -458,8 +520,8 @@
                                         <th class="py-2 px-2">Запит</th>
                                         <th class="py-2 px-2">Модель</th>
                                         <th class="py-2 px-2">Промпт</th>
-                                        <th class="py-2 px-2 text-center">Q<sub>det</sub>, %</th>
-                                        <th class="py-2 px-2 text-center">Повнота FC, %</th>
+                                        <th class="py-2 px-2 text-center">Якість, %</th>
+                                        <th class="py-2 px-2 text-center">Повнота фактів, %</th>
                                         <th class="py-2 px-2 text-center">Галюц.</th>
                                         <th class="py-2 px-2 text-center">Час, мс</th>
                                         <th class="py-2 px-2 text-center">Токени</th>
@@ -529,7 +591,7 @@
                                             Імпорт ручної оцінки (CSV)
                                         </button>
                                         <input type="file" id="manualSampleCsvInput" accept=".csv" class="hidden" onchange="handleImportManualSampleCsv(event)">
-                                        <button onclick="openExportModal()" class="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm">
+                                        <button onclick="openExportModal()" class="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
                                             Експорт таблиць (MD / CSV / LaTeX)
                                         </button>
                                     </div>
@@ -538,11 +600,11 @@
                                 <div class="flex flex-wrap items-center gap-6 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs">
                                     <label class="flex items-center gap-2 cursor-pointer font-medium text-slate-800">
                                         <input type="checkbox" id="anBalancedOnlyCheckbox" checked onchange="applyFlexibleAnalyticsFilters()" class="rounded text-blue-600">
-                                        <span>Збалансований перетин вибірки (спільні запити для всіх обраних умов)</span>
+                                        <span>Лише запити, які пройшли всі обрані моделі та промпти</span>
                                     </label>
                                     <label class="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
                                         <input type="checkbox" id="anIncludeSelfJudgedCheckbox" onchange="applyFlexibleAnalyticsFilters()" class="rounded text-indigo-600">
-                                        <span>Включити самооцінювання (self_judged=1) у розрахунок рубрики</span>
+                                        <span>Враховувати оцінки, де модель оцінювала саму себе</span>
                                     </label>
                                 </div>
 
@@ -617,7 +679,7 @@
                                         </p>
                                     </div>
                                     <div class="flex flex-wrap gap-1.5" id="deploymentPresetButtons">
-                                        <button type="button" onclick="selectDeploymentPreset('balanced')" id="presetBtn-balanced" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white shadow-sm transition">
+                                        <button type="button" onclick="selectDeploymentPreset('balanced')" id="presetBtn-balanced" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white transition">
                                             Збалансований
                                         </button>
                                         <button type="button" onclick="selectDeploymentPreset('safety_first')" id="presetBtn-safety_first" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition">
@@ -726,11 +788,11 @@
                                             <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
                                                 <th class="py-2.5 px-3">Стратегія промпту</th>
                                                 <th class="py-2.5 px-2 text-center">n</th>
-                                                <th class="py-2.5 px-2 text-center">Q<sub>det</sub>, % (95% ДІ)</th>
-                                                <th class="py-2.5 px-2 text-center">Повнота FC, % (95% ДІ)</th>
-                                                <th class="py-2.5 px-2 text-center">Формат FMT, %</th>
+                                                <th class="py-2.5 px-2 text-center">Якість, % (95% ДІ)</th>
+                                                <th class="py-2.5 px-2 text-center">Повнота фактів, % (95% ДІ)</th>
+                                                <th class="py-2.5 px-2 text-center">Надійність формату, %</th>
                                                 <th class="py-2.5 px-2 text-center">Галюц., %</th>
-                                                <th class="py-2.5 px-2 text-center">Шлюз F1 (FN-rate)</th>
+                                                <th class="py-2.5 px-2 text-center">Передача оператору: F1 (пропуски)</th>
                                                 <th class="py-2.5 px-2 text-center">Час: Сер / Мед, мс</th>
                                                 <th class="py-2.5 px-2 text-center">Токени (Вх/Вих)</th>
                                                 <th class="py-2.5 px-2 text-center">Вартість ($/1M)</th>
@@ -837,11 +899,11 @@
                                                 <th class="py-2 px-3">Серія експерименту</th>
                                                 <th class="py-2 px-2 text-center">Статус</th>
                                                 <th class="py-2 px-2 text-center">Замірів (n)</th>
-                                                <th class="py-2 px-2 text-center">Q<sub>det</sub>, %</th>
-                                                <th class="py-2 px-2 text-center">Повнота FC, %</th>
-                                                <th class="py-2 px-2 text-center">Схожість SS, %</th>
+                                                <th class="py-2 px-2 text-center">Якість, %</th>
+                                                <th class="py-2 px-2 text-center">Повнота фактів, %</th>
+                                                <th class="py-2 px-2 text-center">Схожість до еталона, %</th>
                                                 <th class="py-2 px-2 text-center">Рубрика, %</th>
-                                                <th class="py-2 px-2 text-center">Автоматиз. AR, %</th>
+                                                <th class="py-2 px-2 text-center">Автовідповіді, %</th>
                                                 <th class="py-2 px-2 text-center">Час, мс</th>
                                                 <th class="py-2 px-2 text-center">Вартість ($/1M)</th>
                                             </tr>
@@ -867,10 +929,10 @@
                                             <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
                                                 <th class="py-2.5 px-3">Модель</th>
                                                 <th class="py-2.5 px-2 text-center">n</th>
-                                                <th class="py-2.5 px-2 text-center">Q<sub>det</sub>, % (95% ДІ)</th>
-                                                <th class="py-2.5 px-2 text-center">Повнота FC, % (95% ДІ)</th>
-                                                <th class="py-2.5 px-2 text-center">Схожість SS, %</th>
-                                                <th class="py-2.5 px-2 text-center">Формат FMT, %</th>
+                                                <th class="py-2.5 px-2 text-center">Якість, % (95% ДІ)</th>
+                                                <th class="py-2.5 px-2 text-center">Повнота фактів, % (95% ДІ)</th>
+                                                <th class="py-2.5 px-2 text-center">Схожість до еталона, %</th>
+                                                <th class="py-2.5 px-2 text-center">Надійність формату, %</th>
                                                 <th class="py-2.5 px-2 text-center">Галюц., %</th>
                                                 <th class="py-2.5 px-2 text-center">Рубрика (1-5)</th>
                                                 <th class="py-2.5 px-2 text-center">Час: Сер / Мед (P95), мс</th>
@@ -956,7 +1018,7 @@
                             <option value="troubleshooting">Проблемні</option>
                             <option value="clarification">Уточнювальні</option>
                         </select>
-                        <button type="button" onclick="openImportQueriesModal()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition">
+                        <button type="button" onclick="openImportQueriesModal()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition">
                             + Додати / Імпорт JSON
                         </button>
                     </div>
@@ -1088,7 +1150,7 @@
                     </details>
 
                     <div class="flex items-center justify-between gap-3 pt-1">
-                        <button type="submit" class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm transition">
+                        <button type="submit" class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition">
                             Зберегти налаштування у .env
                         </button>
                         <div id="settingsSavedNotice" class="hidden text-xs font-semibold text-emerald-800 bg-emerald-100 px-3 py-1.5 rounded-lg">
@@ -1113,7 +1175,7 @@
                         <button onclick="openCustomModelModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-semibold transition">
                             Додати модель
                         </button>
-                        <button onclick="probeApiLimits({ silent: false })" id="probeApiLimitsBtn" class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 shadow-sm transition">
+                        <button onclick="probeApiLimits({ silent: false })" id="probeApiLimitsBtn" class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 transition">
                             Оновити статуси
                         </button>
                         <button onclick="quickSelectSettingsModels('working')" class="px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 font-semibold transition">
@@ -1175,7 +1237,7 @@
                 <div id="provModalModelsList" class="p-5 overflow-y-auto space-y-3 flex-1 text-xs"></div>
 
                 <div class="px-5 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-end">
-                    <button onclick="closeProviderModelsModal()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm transition">
+                    <button onclick="closeProviderModelsModal()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition">
                         Готово
                     </button>
                 </div>
@@ -1303,7 +1365,7 @@
                     <button onclick="closeDeleteConfirmModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700">
                         Скасувати
                     </button>
-                    <button onclick="confirmDeleteExperimentRun()" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold shadow-sm">
+                    <button onclick="confirmDeleteExperimentRun()" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold">
                         Видалити
                     </button>
                 </div>
@@ -1357,7 +1419,7 @@
                     <button onclick="closePromptEditModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700">
                         Скасувати
                     </button>
-                    <button onclick="savePromptTemplateChanges()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm">
+                    <button onclick="savePromptTemplateChanges()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold">
                         Зберегти шаблон
                     </button>
                 </div>
@@ -1417,7 +1479,7 @@
                     <button onclick="closeJudgeRunModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700 text-xs">
                         Скасувати
                     </button>
-                    <button onclick="confirmJudgeRunEvaluation()" id="confirmJudgeRunBtn" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm text-xs">
+                    <button onclick="confirmJudgeRunEvaluation()" id="confirmJudgeRunBtn" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs">
                         Запустити оцінювання суддею
                     </button>
                 </div>
@@ -1472,7 +1534,7 @@
             </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-slate-200">
                 <button onclick="closeImportQueriesModal()" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs">Скасувати</button>
-                <button onclick="submitImportQueriesJson()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm">Імпортувати в базу</button>
+                <button onclick="submitImportQueriesJson()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs">Імпортувати в базу</button>
             </div>
         </div>
     </div>
@@ -1483,6 +1545,7 @@
     <script src="/static/js/experiments.js?v=5.1"></script>
     <script src="/static/js/analytics.js?v=5.1"></script>
     <script src="/static/js/results.js?v=5.1"></script>
+    <script src="/static/js/home.js?v=5.1"></script>
     <script src="/static/js/dataset.js?v=5.1"></script>
     <script src="/static/js/settings.js?v=5.1"></script>
 </body>

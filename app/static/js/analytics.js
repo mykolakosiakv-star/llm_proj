@@ -309,7 +309,7 @@ function selectDeploymentPreset(presetId) {
         const btn = document.getElementById(`presetBtn-${pid}`);
         if (btn) {
             btn.className = pid === presetId
-                ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white shadow-sm transition'
+                ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white transition'
                 : 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition';
         }
     });
@@ -379,7 +379,7 @@ function renderDecisionSupportAdvisor(data) {
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
-            <div class="p-4 rounded-xl bg-white border-2 border-emerald-300 shadow-sm space-y-2">
+            <div class="p-4 rounded-xl bg-white border-2 border-emerald-300 space-y-2">
                 <div class="flex items-center justify-between">
                     <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-800">Оптимальна модель для впровадження</span>
                     <span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-extrabold text-xs">
@@ -390,7 +390,7 @@ function renderDecisionSupportAdvisor(data) {
                 <p class="text-slate-600 leading-relaxed">${escapeHtml(preset.model_justification_uk)}</p>
             </div>
 
-            <div class="p-4 rounded-xl bg-white border-2 border-indigo-200 shadow-sm space-y-2">
+            <div class="p-4 rounded-xl bg-white border-2 border-indigo-200 space-y-2">
                 <div class="flex items-center justify-between">
                     <span class="text-[11px] font-bold uppercase tracking-wider text-indigo-800">Рекомендована стратегія промпту</span>
                     <span class="px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-900 font-extrabold text-xs">
@@ -412,10 +412,10 @@ function renderDecisionSupportAdvisor(data) {
                         <tr class="bg-slate-50 text-slate-600 border-b border-slate-200">
                             <th class="py-2 px-2.5">Місце та модель</th>
                             <th class="py-2 px-2 text-center">Індекс придатності</th>
-                            <th class="py-2 px-2 text-center">Повнота FC</th>
-                            <th class="py-2 px-2 text-center">Якість Q<sub>det</sub></th>
+                            <th class="py-2 px-2 text-center">Повнота фактів</th>
+                            <th class="py-2 px-2 text-center">Якість</th>
                             <th class="py-2 px-2 text-center">Галюцинації</th>
-                            <th class="py-2 px-2 text-center">Автоматиз. AR</th>
+                            <th class="py-2 px-2 text-center">Автовідповіді</th>
                             <th class="py-2 px-2 text-center">Затримка</th>
                             <th class="py-2 px-2 text-center">Ціна ($/1M)</th>
                         </tr>
@@ -675,9 +675,9 @@ function renderAnalyticsCharts(data) {
         data: {
             labels: byModel.map(m => `${m.model_name} (n=${m.count})`),
             datasets: [
-                { label: 'Композитна якість Q_det (%)', data: byModel.map(m => m.integral_efficiency_pct), backgroundColor: '#2563eb' },
-                { label: 'Повнота FC (%)', data: byModel.map(m => m.fact_coverage_pct), backgroundColor: '#10b981' },
-                { label: 'Схожість SS (%)', data: byModel.map(m => m.semantic_similarity_pct), backgroundColor: '#6366f1' },
+                { label: 'Якість відповіді, %', data: byModel.map(m => m.integral_efficiency_pct), backgroundColor: '#2563eb' },
+                { label: 'Повнота фактів (%)', data: byModel.map(m => m.fact_coverage_pct), backgroundColor: '#10b981' },
+                { label: 'Схожість до еталона (%)', data: byModel.map(m => m.semantic_similarity_pct), backgroundColor: '#6366f1' },
                 { label: 'Автоматизація AR (%)', data: byModel.map(m => m.automation_rate_pct), backgroundColor: '#f59e0b' },
             ]
         },
@@ -710,9 +710,9 @@ function renderAnalyticsCharts(data) {
         data: {
             labels: byPrompt.map(p => `${p.prompt_code} (n=${p.count})`),
             datasets: [
-                { label: 'Композитна якість Q_det (%)', data: byPrompt.map(p => p.integral_efficiency_pct), backgroundColor: '#4f46e5' },
-                { label: 'Повнота FC (%)', data: byPrompt.map(p => p.fact_coverage_pct), backgroundColor: '#10b981' },
-                { label: 'Формат FMT (%)', data: byPrompt.map(p => p.format_compliance_pct), backgroundColor: '#0ea5e9' },
+                { label: 'Якість відповіді, %', data: byPrompt.map(p => p.integral_efficiency_pct), backgroundColor: '#4f46e5' },
+                { label: 'Повнота фактів (%)', data: byPrompt.map(p => p.fact_coverage_pct), backgroundColor: '#10b981' },
+                { label: 'Надійність формату (%)', data: byPrompt.map(p => p.format_compliance_pct), backgroundColor: '#0ea5e9' },
             ]
         },
         options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }
@@ -748,7 +748,7 @@ function renderAnalyticsCharts(data) {
                     beginAtZero: true,
                 },
                 y: {
-                    title: { display: true, text: 'Композитна якість Q_det (%, більше = краще)' },
+                    title: { display: true, text: 'Якість відповіді (%, більше = кращее)' },
                     min: 0,
                     max: 100,
                 }
@@ -758,7 +758,7 @@ function renderAnalyticsCharts(data) {
                     callbacks: {
                         label: (ctx) => {
                             const raw = ctx.raw || {};
-                            return `${ctx.dataset.label}: Q_det=${raw.y}%, FC=${raw.fc}%, Час=${raw.x} мс (n=${raw.n})`;
+                            return `${ctx.dataset.label}: Якість=${raw.y}%, повнота фактів=${raw.fc}%, Час=${raw.x} мс (n=${raw.n})`;
                         }
                     }
                 }

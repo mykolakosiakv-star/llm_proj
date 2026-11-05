@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function initApplication() {
     await refreshMetadataAndData();
     await pollLogsAndStatus();
+    renderHome();
 }
 
 async function refreshMetadataAndData() {
@@ -79,7 +80,7 @@ async function refreshMetadataAndData() {
 }
 
 function switchTab(tabId) {
-    const tabs = ['sandbox', 'experiments', 'analytics', 'dataset', 'settings', 'logs'];
+    const tabs = ['home', 'sandbox', 'experiments', 'analytics', 'dataset', 'settings', 'logs'];
     tabs.forEach(t => {
         const sec = document.getElementById(`tab-${t}`);
         const btn = document.getElementById(`tabBtn-${t}`);
@@ -94,6 +95,9 @@ function switchTab(tabId) {
     }
     if (tabId === 'experiments') {
         updateBatchExperimentEstimate();
+    }
+    if (tabId === 'home') {
+        renderHome();
     }
 }
 

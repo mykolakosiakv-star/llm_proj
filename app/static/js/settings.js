@@ -290,6 +290,32 @@ async function deleteCustomModelEntry(modelKey) {
     }
 }
 
+const MIN_QUERIES_PER_DOMAIN = 30;
+
+// Скільки різних запитів реально піде в серію по кожній сфері і чи вистачає для висновків
+function sampleSizeHintHtml(domain, categories, maxPerCategory, equalDomains) {
+    const domainCodes = domain === 'all' ? Object.keys(APP_STATE.metadata?.domains || {}) : [domain];
+    const perDomain = {};
+    domainCodes.forEach(code => {
+        perDomain[code] = categories.reduce((sum, cat) => {
+            const available = (APP_STATE.queries || []).filter(q => (q.domain || 'fintech') === code && q.category === cat).length;
+            return sum + Math.min(maxPerCategory, available);
+        }, 0);
+    });
+    const counts = Object.values(perDomain);
+    if (!counts.length) return '';
+    const effective = equalDomains && domain === 'all' ? Math.min(...counts) : null;
+    const lacking = Object.entries(perDomain).filter(([, n]) => (effective ?? n) < MIN_QUERIES_PER_DOMAIN);
+    const names = APP_STATE.metadata?.domains || {};
+    const summary = effective !== null
+        ? `У кожній сфері піде по ${effective} запитів.`
+        : Object.entries(perDomain).map(([code, n]) => `${names[code]?.name_uk || code}: ${n}`).join('; ') + '.';
+    const warning = lacking.length
+        ? `Для висновків за гіпотезами потрібно не менше ${MIN_QUERIES_PER_DOMAIN} запитів на сферу. Поки цього не вистачає, результат буде попереднім. Додайте запити на вкладці «Дані».`
+        : 'Запитів достатньо для висновків за гіпотезами.';
+    return `<div class="mb-1.5 ${lacking.length ? 'text-amber-800' : 'text-emerald-800'}">${escapeHtml(summary)} ${escapeHtml(warning)}</div>`;
+}
+
 async function updateBatchExperimentEstimate() {
     const box = document.getElementById('expEstimateContent');
     if (!box) return;
@@ -302,6 +328,7 @@ async function updateBatchExperimentEstimate() {
     const maxQueries = Number(document.getElementById('expMaxQueriesInput')?.value) || 2;
     const repeats = Number(document.getElementById('expRepeatsInput')?.value) || 1;
     const judgeModelId = document.getElementById('expJudgeModelSelect')?.value || null;
+    const equalDomains = document.getElementById('expEqualDomainSample')?.checked ?? true;
 
     if (!modelIds.length || !promptCodes.length || !categories.length) {
         box.innerHTML = `<span class="text-slate-500">Оберіть принаймні одну модель, промпт і категорію для розрахунку прогнозу.</span>`;
@@ -340,6 +367,7 @@ async function updateBatchExperimentEstimate() {
         }
 
         box.innerHTML = `
+            ${sampleSizeHintHtml(domain, categories, maxQueries, equalDomains)}
             <div class="flex flex-wrap justify-between gap-2">
                 <span>Викликів генерації: <b>${res.total_generation_calls}</b>${res.total_judge_calls > 0 ? ` + суддя: <b>${res.total_judge_calls}</b>` : ''}</span>
                 <span>Орієнтовний час: <b>${timeStr}</b></span>

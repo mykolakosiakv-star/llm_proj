@@ -60,7 +60,7 @@ function populateControls() {
                 <div class="p-4 text-center text-amber-900 bg-amber-50 rounded-lg border border-amber-200 text-xs space-y-2">
                     <div class="font-bold">Не обрано жодної активної моделі</div>
                     <div class="text-[11px] text-slate-600">Для запуску експерименту необхідно увімкнути принаймні одну модель у налаштуваннях.</div>
-                    <button type="button" onclick="switchTab('settings')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-xs shadow-sm transition">
+                    <button type="button" onclick="switchTab('settings')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-xs transition">
                         Перейти до налаштувань моделей
                     </button>
                 </div>
@@ -158,6 +158,60 @@ function populateControls() {
         logPrEl.innerHTML = `<option value="all">Усі промпти</option>` +
             APP_STATE.prompts.map(p => `<option value="${p.code}" ${p.code === prevLogPr ? 'selected' : ''}>${escapeHtml(p.code)}</option>`).join('');
     }
+}
+
+// Готові набори параметрів під кожну гіпотезу: що змінюється, те й порівнюється
+const EXPERIMENT_PRESETS = {
+    h1: {
+        title: 'H1: залежність від сфери',
+        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], minModels: 2,
+        note: 'Усі сфери, однакова кількість запитів у кожній, пошук по базі знань. Потрібні щонайменше дві моделі.',
+    },
+    h2: {
+        title: 'H2: вплив промпту й контексту',
+        domain: null, prompts: ['P1', 'P3', 'P5'], contexts: ['no_context', 'retrieved_context', 'gold_context'], minModels: 2,
+        note: 'Одна сфера, три стратегії промпту, усі три режими контексту. Потрібні щонайменше дві моделі для порівняння.',
+    },
+    h3: {
+        title: 'H3: чи досить дешевої моделі',
+        domain: 'all', prompts: ['P3'], contexts: ['retrieved_context'], minModels: 2,
+        note: 'Усі сфери. Оберіть дешеву й сильнішу модель: для порівняння вартості в обох має бути задана ціна.',
+    },
+};
+
+function largestDomainCode() {
+    const counts = {};
+    (APP_STATE.queries || []).forEach(q => { counts[q.domain || 'fintech'] = (counts[q.domain || 'fintech'] || 0) + 1; });
+    return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || 'fintech';
+}
+
+function setCheckedByValue(inputName, values) {
+    document.querySelectorAll(`input[name="${inputName}"]`).forEach(el => { el.checked = values.includes(el.value); });
+}
+
+function applyExperimentPreset(code) {
+    const preset = EXPERIMENT_PRESETS[code];
+    if (!preset) return;
+    document.getElementById('expTitleInput').value = preset.title;
+    document.getElementById('expDomainSelect').value = preset.domain || largestDomainCode();
+    document.getElementById('expEqualDomainSample').checked = true;
+    document.getElementById('expMaxQueriesInput').value = 12;
+    document.getElementById('expRepeatsInput').value = 1;
+    document.querySelectorAll('input[name="expCategory"]').forEach(el => { el.checked = true; });
+    setCheckedByValue('expPrompt', preset.prompts);
+    setCheckedByValue('expContextMode', preset.contexts);
+
+    const chosen = Array.from(document.querySelectorAll('input[name="expModel"]:checked'));
+    if (chosen.length < preset.minModels) {
+        const working = new Set((APP_STATE.metadata?.models || []).filter(m => m.status_code === 'ok').map(m => m.id));
+        document.querySelectorAll('input[name="expModel"]').forEach(el => {
+            const picked = document.querySelectorAll('input[name="expModel"]:checked').length;
+            if (!el.checked && picked < preset.minModels && working.has(el.value)) el.checked = true;
+        });
+    }
+    document.getElementById('expPresetNote').textContent = preset.note;
+    onExpDomainSelectChange();
+    updateBatchExperimentEstimate();
 }
 
 function toggleAllExpModelsCheckboxes(checked) {
@@ -278,7 +332,7 @@ function renderExperimentRunsList() {
         const statusBadges = getRunStatusBadgeHtml(r);
         const isIncomplete = (r.completed_items || 0) < (r.total_items || 0) || r.status !== 'completed';
         const resumeBtnHtml = isIncomplete
-            ? `<button onclick="resumeExperimentRun(${r.id})" id="resumeRunBtn-${r.id}" title="Продовжити виконання серії з місця зупинки" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm transition">
+            ? `<button onclick="resumeExperimentRun(${r.id})" id="resumeRunBtn-${r.id}" title="Продовжити виконання серії з місця зупинки" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition">
                 Довиконати (${(r.total_items || 0) - (r.completed_items || 0)})
                </button>`
             : '';
@@ -289,7 +343,7 @@ function renderExperimentRunsList() {
             : '';
 
         return `
-            <div class="p-3.5 rounded-xl border ${isCurrent ? 'border-blue-500 bg-blue-50/40 shadow-sm' : 'border-slate-200 bg-slate-50'} flex flex-col gap-2.5 transition">
+            <div class="p-3.5 rounded-xl border ${isCurrent ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200 bg-slate-50'} flex flex-col gap-2.5 transition">
                 <div onclick="selectRunForItemsTable(${r.id})" class="cursor-pointer space-y-1.5">
                     <div class="font-bold text-slate-900 flex flex-wrap items-center gap-1.5">
                         <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono text-xs">#${r.id}</span>
@@ -648,7 +702,7 @@ async function openEvaluationItemDetailModal(itemId) {
                 <div class="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-2">
                     <div class="flex items-center justify-between">
                         <span class="text-xs font-bold uppercase text-emerald-800">Еталон (Ground Truth) та Фактична точність</span>
-                        <span class="text-xs font-bold text-emerald-900">Повнота FC = ${ev.fact_coverage_pct}% | Галюцинацій: ${ev.hallucination_count || 0}</span>
+                        <span class="text-xs font-bold text-emerald-900">Повнота фактів = ${ev.fact_coverage_pct}% | Галюцинацій: ${ev.hallucination_count || 0}</span>
                     </div>
                     <div class="p-3 rounded-lg bg-white border border-emerald-200 text-slate-800 text-xs leading-relaxed">
                         ${escapeHtml(q.reference_answer)}
@@ -703,7 +757,7 @@ async function openEvaluationItemDetailModal(itemId) {
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <span class="text-xs font-bold uppercase text-slate-800">Детерміновані метрики якості та чек-лист</span>
                     <span class="px-3 py-1 rounded-lg bg-blue-600 text-white font-extrabold text-sm">
-                        Композитна якість Q_det = ${ev.integral_efficiency_pct}%
+                        Якість відповіді = ${ev.integral_efficiency_pct}%
                     </span>
                 </div>
 
@@ -717,7 +771,7 @@ async function openEvaluationItemDetailModal(itemId) {
                         <div class="text-base font-extrabold text-emerald-700">${ev.fact_coverage_pct}%</div>
                     </div>
                     <div class="p-2.5 rounded-lg bg-white border border-slate-200">
-                        <div class="text-[11px] text-slate-500">Схожість SS (Cosine / ROUGE-L)</div>
+                        <div class="text-[11px] text-slate-500">Схожість до еталона (Cosine / ROUGE-L)</div>
                         <div class="text-base font-extrabold text-blue-700">${ev.semantic_similarity_pct}% <span class="text-[10px] font-normal">(${ev.stem_cosine_pct}% / ${ev.rouge_l_f1_pct}%)</span></div>
                     </div>
                     <div class="p-2.5 rounded-lg bg-white border border-slate-200">

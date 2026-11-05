@@ -820,6 +820,26 @@ def _build_analytics_payload(
     }
 
 
+def compute_hypotheses_overview() -> Dict[str, Any]:
+    """Вердикти за гіпотезами по всіх завершених серіях: показуються на головній сторінці."""
+    conn = get_connection()
+    try:
+        run_ids = [
+            r["id"] for r in conn.execute(
+                "SELECT id FROM experiment_runs WHERE execution_mode != 'sandbox' AND completed_items > 0 ORDER BY id"
+            )
+        ]
+    finally:
+        conn.close()
+    if not run_ids:
+        return {"available": False, "runs": 0}
+    payload = compute_flexible_analytics(run_ids=run_ids, balanced_only=True)
+    hypotheses = payload.get("hypotheses")
+    if not hypotheses:
+        return {"available": False, "runs": len(run_ids)}
+    return {"available": True, "runs": len(run_ids), "hypotheses": hypotheses}
+
+
 def compute_run_analytics(
     run_id: int,
     balanced_only: bool = True,

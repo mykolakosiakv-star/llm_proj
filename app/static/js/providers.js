@@ -204,7 +204,7 @@ function renderActiveModelsSummary() {
         const stLabel = m.status_label || 'Не перевірено';
         const stDot = stCode === 'ok' ? 'text-emerald-600' : (stCode === 'unchecked' ? 'text-slate-500' : 'text-rose-600');
         return `
-            <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-white border-slate-300 shadow-sm text-xs hover:border-slate-400 transition">
+            <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-white border-slate-300 text-xs hover:border-slate-400 transition">
                 <span class="w-2 h-2 rounded-full ${dot}"></span>
                 <span class="font-semibold text-slate-800">${escapeHtml(m.name)}</span>
                 <span class="text-[10px] ${stDot} font-mono">(${escapeHtml(stLabel)})</span>
@@ -256,7 +256,7 @@ function renderProvidersTilesGrid() {
                 : `<span class="text-slate-400 font-mono text-[11px]">Ключ не задано</span>`);
 
         return `
-            <div class="rounded-xl border border-slate-200 bg-white p-4 flex flex-col justify-between space-y-3 shadow-sm hover:border-slate-400 transition">
+            <div class="rounded-xl border border-slate-200 bg-white p-4 flex flex-col justify-between space-y-3 hover:border-slate-400 transition">
                 <div class="space-y-2.5">
                     <div class="flex items-start justify-between gap-2 border-b border-slate-100 pb-2.5">
                         <div class="flex items-center gap-2.5">
@@ -431,7 +431,7 @@ function renderProviderModalListContent(providerId) {
         const safeId = escapeHtml(m.id);
 
         return `
-            <div class="p-3.5 rounded-xl border ${isChecked ? 'border-blue-400 bg-white shadow-sm' : 'border-slate-200 bg-slate-50/60'} hover:border-blue-400 transition">
+            <div class="p-3.5 rounded-xl border ${isChecked ? 'border-blue-400 bg-white' : 'border-slate-200 bg-slate-50/60'} hover:border-blue-400 transition">
                 <div class="flex items-start justify-between gap-3">
                     <label class="flex items-start gap-2.5 cursor-pointer flex-1">
                         <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleSingleModelEnabled('${safeId}', this.checked)" class="w-4 h-4 mt-0.5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer">
