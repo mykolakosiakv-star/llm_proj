@@ -287,7 +287,7 @@ function renderProvidersTilesGrid() {
 
                 <div class="pt-2 border-t border-slate-100">
                     <button onclick="openProviderModelsModal('${p.id}')" class="w-full py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center justify-between transition">
-                        <span>Увімкнено ${enabledCount} з ${pModels.length}</span>
+                        <span>Керувати моделями</span>
                         <span class="text-slate-400 font-mono">&rarr;</span>
                     </button>
                 </div>
@@ -321,6 +321,14 @@ function openProviderModelsModal(providerId) {
 
     modal.classList.remove('hidden');
     modal.classList.add('flex');
+}
+
+function describeStatusSource(m) {
+    if (!m.checked_at) return 'Не перевірено';
+    const how = { ping: 'перевірено запитом', list: 'за списком провайдера', provider: 'за станом провайдера' }[m.check_kind] || '';
+    const parts = [m.checked_ago_uk, how];
+    if (m.is_stale) parts.push('застаріло, варто оновити');
+    return parts.filter(Boolean).join(', ');
 }
 
 function renderProviderModalListContent(providerId) {
@@ -376,7 +384,7 @@ function renderProviderModalListContent(providerId) {
     const canRouteProvider = hasOpenRouterKey && ['groq', 'openai', 'anthropic'].includes(activeProvId) && allProviderModels.some(m => m.can_openrouter);
     if (routeCtrlEl) {
         if (canRouteProvider) {
-            const anyOpenRouter = allProviderModels.some(m => m.can_openrouter && ((meta.settings?.model_routes || {})[m.id] === 'openrouter' || m.route_via === 'openrouter'));
+            const anyOpenRouter = allProviderModels.some(m => m.can_openrouter && m.route === 'openrouter');
             routeCtrlEl.innerHTML = `
                 <div class="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg p-1 text-[11px]">
                     <span class="text-slate-300 px-1.5">Маршрут:</span>
@@ -402,7 +410,7 @@ function renderProviderModalListContent(providerId) {
         const statusCode = m.status_code || 'unchecked';
         const statusLabel = m.status_label || 'Не перевірено';
         const statusBadge = getStatusBadgeHtml(statusCode, statusLabel);
-        const checkedAgo = m.checked_ago_uk || 'Не перевірено';
+        const checkedAgo = describeStatusSource(m);
 
         const inCtx = formatTokenNum(m.context_in || m.input_limit);
         const priceKnown = Boolean(m.price_known) && m.cost_per_1m_input_usd != null && m.cost_per_1m_output_usd != null;
@@ -555,38 +563,23 @@ async function toggleProviderRoute(providerId, targetRoute) {
     const meta = APP_STATE.metadata;
     if (!meta || !meta.models) return;
 
-    if (!meta.settings) meta.settings = {};
-    if (!meta.settings.model_routes) meta.settings.model_routes = {};
-
-    const pModels = meta.models.filter(m => m.provider === providerId && m.can_openrouter);
-    pModels.forEach(m => {
-        meta.settings.model_routes[m.id] = targetRoute;
-        m.preferred = targetRoute;
-        const activeInfo = targetRoute === 'openrouter' ? (m.openrouter || {}) : (m.native || {});
-        if (activeInfo.status_code) {
-            m.status_code = activeInfo.status_code;
-            m.status_label = activeInfo.status_label;
-            m.is_ready = activeInfo.status_code === 'ok';
-            m.route_via = m.is_ready ? targetRoute : 'none';
-        }
+    const routes = { ...(meta.settings?.model_routes || {}) };
+    meta.models.filter(m => m.provider === providerId && m.can_openrouter).forEach(m => {
+        routes[m.id] = targetRoute;
     });
-
-    renderProvidersTilesGrid();
-    renderActiveModelsSummary();
-    populateControls();
-    if (APP_STATE.activeModalProviderId) {
-        renderProviderModalListContent(APP_STATE.activeModalProviderId);
-    }
 
     try {
         await fetch('/api/settings', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_routes: meta.settings.model_routes })
+            body: JSON.stringify({ model_routes: routes })
         });
     } catch (e) {
         console.error('Помилка оновлення маршрутів провайдера:', e);
+        return;
     }
+    // Статус береться з реального запиту за обраним маршрутом, а не вгадується на стороні інтерфейсу
+    await probeApiLimits({ silent: false });
 }
 
 async function quickSelectSettingsModels(mode) {
@@ -597,7 +590,7 @@ async function quickSelectSettingsModels(mode) {
         if (mode === 'all') {
             m.enabled = !m.is_dynamic;
         } else if (mode === 'working') {
-            m.enabled = Boolean(m.is_ready) && !m.is_dynamic;
+            m.enabled = m.status_code === 'ok' && !m.is_dynamic;
         }
     });
 

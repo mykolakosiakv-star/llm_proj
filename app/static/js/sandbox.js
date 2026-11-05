@@ -6,12 +6,11 @@ function buildJudgeSelectOptionsHtml(enabledModels, selectedValue, includeNoneOp
         return noneOpt + `<option value="" disabled>Немає увімкнених моделей (увімкніть у вкладці Провайдери та моделі)</option>`;
     }
     const opts = enabledModels.map(m => {
-        const routeTag = (m.can_openrouter && m.route_via === 'openrouter') ? 'OpenRouter' : 'Прямий API';
+        const viaOpenRouter = m.can_openrouter && m.route === 'openrouter';
+        const routeTag = viaOpenRouter ? 'OpenRouter' : 'Прямий API';
         const statusStr = m.status_label || 'Працює';
         const inCtx = formatTokenNum(m.context_in || m.input_limit);
-        const rpdVal = (m.can_openrouter && m.route_via === 'openrouter')
-            ? (m.openrouter_limits?.rpd || m.rpd || '-')
-            : (m.native_limits?.rpd || m.rpd || '-');
+        const rpdVal = m.rpd || '-';
         const famStr = m.family || m.provider || '';
         const isSel = m.id === selectedValue ? 'selected' : '';
         return `<option value="${m.id}" ${isSel}>${escapeHtml(m.name)} | ${escapeHtml(statusStr)} | RPD: ${escapeHtml(String(rpdVal))} | Контекст: ${inCtx} | ${routeTag} [${escapeHtml(famStr)}]</option>`;

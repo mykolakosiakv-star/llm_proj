@@ -35,9 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function initApplication() {
     await refreshMetadataAndData();
     await pollLogsAndStatus();
-    if (APP_STATE.metadata?.settings?.probe_on_startup !== false) {
-        probeApiLimits({ silent: true, only_enabled: true });
-    }
 }
 
 async function refreshMetadataAndData() {

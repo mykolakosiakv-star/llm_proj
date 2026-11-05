@@ -880,20 +880,6 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "limits": eff_limits,
             "first_seen": r.get("first_seen"),
             "last_seen": r.get("last_seen"),
-            "native": {
-                "status_code": raw_status,
-                "status_label": get_status_label_uk(raw_status),
-                "context_in": r.get("context_window") or 128000,
-                "context_out": lim.get("output_limit") or 8192,
-                "price_in": float(in_p) if price_known else None,
-                "price_out": float(out_p) if price_known else None,
-                "limits": eff_limits,
-            },
-            "openrouter": {
-                "status_code": "ok" if keys_present["openrouter"] else "no_key",
-                "status_label": get_status_label_uk("ok" if keys_present["openrouter"] else "no_key"),
-                "limits": {"rpm": OPENROUTER_FREE_RPM_DOCS, "rpd": 50},
-            } if can_or else None,
         }
 
     providers_out: Dict[str, Dict[str, Any]] = {}

@@ -29,7 +29,7 @@ function populateControls() {
         } else {
             const prevVal = modelSel.value;
             modelSel.innerHTML = enabledModels.map(m => {
-                const routeTag = (m.can_openrouter && m.route_via === 'openrouter') ? ' [OpenRouter]' : '';
+                const routeTag = (m.can_openrouter && m.route === 'openrouter') ? ' [OpenRouter]' : '';
                 return `<option value="${m.id}">${escapeHtml(m.name)}${routeTag} (${escapeHtml(m.status_label || 'Працює')})</option>`;
             }).join('');
             if (prevVal && enabledModels.some(m => m.id === prevVal)) {

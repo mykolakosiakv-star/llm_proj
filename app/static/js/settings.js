@@ -31,7 +31,9 @@ async function saveSystemSettings() {
         if (el) el.value = '';
     });
 
-    await probeApiLimits({ silent: false, only_enabled: true });
+    // Сервер сам запускає перевірку після зміни ключів, тут лише чекаємо її завершення
+    await waitForProbeToFinish();
+    await refreshMetadataAndData();
     await pollLogsAndStatus();
 
     const notice = document.getElementById('settingsSavedNotice');
@@ -41,9 +43,7 @@ async function saveSystemSettings() {
     }
 }
 
-let _statusPollTimer = null;
-
-async function syncModelsSnapshotFromServer() {
+async function syncModelsSnapshotFromServer(options = {}) {
     const snap = await fetch('/api/models/status').then(r => r.json());
     if (APP_STATE.metadata) {
         APP_STATE.metadata.probe = snap;
@@ -64,79 +64,77 @@ async function syncModelsSnapshotFromServer() {
     renderKeysQuickStatusPills();
     renderProvidersTilesGrid();
     renderActiveModelsSummary();
-    populateControls();
+    // Форми вибору моделей перебудовуються лише після перевірки, інакше під час опитування збивалися б відмічені значення
+    if (options.refreshControls !== false) populateControls();
     if (APP_STATE.activeModalProviderId) {
         renderProviderModalListContent(APP_STATE.activeModalProviderId);
     }
     return snap;
 }
 
+const PROBE_WAIT_LIMIT_MS = 5 * 60 * 1000;
+
+function describeProbeProgress(probe) {
+    if (!probe || !probe.running) return 'Перевірка...';
+    if (probe.total) return `Перевірено ${probe.done} з ${probe.total}`;
+    return probe.phase || 'Перевірка...';
+}
+
+// Кінець перевірки визначає сервер, а не кількість опитувань: перевірка може тривати довго
+async function waitForProbeToFinish(onProgress) {
+    const deadline = Date.now() + PROBE_WAIT_LIMIT_MS;
+    while (Date.now() < deadline) {
+        const snap = await syncModelsSnapshotFromServer({ refreshControls: false });
+        if (onProgress) onProgress(snap.probe);
+        if (!snap.is_probing) return snap;
+        await new Promise(resolve => setTimeout(resolve, 800));
+    }
+    return null;
+}
+
+function setProbeBanner(text, isError = false) {
+    const banner = document.getElementById('probeFeedbackBanner');
+    if (!banner) return;
+    banner.className = `p-3 rounded-lg text-xs border block ${isError ? 'border-rose-300 bg-rose-50 text-rose-800' : 'border-slate-300 bg-slate-50 text-slate-800'}`;
+    banner.textContent = text;
+}
+
+function hideProbeBannerLater() {
+    setTimeout(() => document.getElementById('probeFeedbackBanner')?.classList.add('hidden'), 5000);
+}
+
 async function probeApiLimits(options = {}) {
     const silent = Boolean(options.silent);
     const onlyEnabled = options.only_enabled !== undefined ? Boolean(options.only_enabled) : true;
-    const modelKey = options.model_key || null;
+    const idleLabel = 'Оновити статуси';
     const btn = document.getElementById('probeApiLimitsBtn');
-    const banner = document.getElementById('probeFeedbackBanner');
+    const setButton = text => {
+        if (!btn) return;
+        btn.textContent = text;
+        btn.disabled = text !== idleLabel;
+    };
 
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Перевірка...';
-    }
-
-    if (banner && !silent) {
-        banner.className = 'p-3.5 rounded-xl text-xs font-semibold flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-900 shadow-sm block transition';
-        banner.innerHTML = '<span>Фонова перевірка статусів моделей запущена. Статуси оновлюються в реальному часі...</span>';
-    }
-
+    setButton('Перевірка...');
+    if (!silent) setProbeBanner('Перевірка запущена. Статуси оновлюються в міру отримання відповідей.');
     try {
-        await fetch('/api/models/status/refresh', {
+        const resp = await fetch('/api/models/status/refresh', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: modelKey, only_enabled: onlyEnabled, force: true }),
+            body: JSON.stringify({ model_key: options.model_key || null, only_enabled: onlyEnabled, force: true }),
         });
-
-        if (_statusPollTimer) clearInterval(_statusPollTimer);
-        let ticks = 0;
-        _statusPollTimer = setInterval(async () => {
-            ticks += 1;
-            try {
-                const snap = await syncModelsSnapshotFromServer();
-                if (!snap.is_probing || ticks >= 25) {
-                    clearInterval(_statusPollTimer);
-                    _statusPollTimer = null;
-                    await refreshMetadataAndData();
-                    if (APP_STATE.activeModalProviderId) {
-                        renderProviderModalListContent(APP_STATE.activeModalProviderId);
-                    }
-                    if (banner && !silent) {
-                        const totalModels = (APP_STATE.metadata?.models || []).length;
-                        banner.className = 'p-3.5 rounded-xl text-xs font-semibold flex items-center justify-between bg-emerald-50 border border-emerald-200 text-emerald-900 shadow-sm block transition';
-                        banner.innerHTML = `<span>Статуси оновлено. У реєстрі моделей: ${totalModels}.</span><button onclick="this.parentElement.classList.add('hidden')" class="text-emerald-700 hover:text-emerald-950 font-bold ml-2">Закрити</button>`;
-                        setTimeout(() => { if (banner) banner.classList.add('hidden'); }, 5000);
-                    }
-                    if (btn) {
-                        btn.disabled = false;
-                        btn.textContent = 'Оновити статуси';
-                    }
-                }
-            } catch (_) {
-                clearInterval(_statusPollTimer);
-                _statusPollTimer = null;
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = 'Оновити статуси';
-                }
-            }
-        }, 700);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const snap = await waitForProbeToFinish(probe => setButton(describeProbeProgress(probe)));
+        await refreshMetadataAndData();
+        if (!silent) {
+            setProbeBanner(snap
+                ? `Статуси оновлено. У реєстрі моделей: ${(APP_STATE.metadata?.models || []).length}.`
+                : 'Перевірка триває довше за очікуване. Результати з\'являться в списку, коли вона завершиться.');
+            hideProbeBannerLater();
+        }
     } catch (e) {
-        if (banner && !silent) {
-            banner.className = 'p-3.5 rounded-xl text-xs font-semibold flex items-center justify-between bg-rose-50 border border-rose-200 text-rose-900 shadow-sm block transition';
-            banner.innerHTML = `<span>Помилка запуску перевірки: ${escapeHtml(e.message || String(e))}</span><button onclick="this.parentElement.classList.add('hidden')" class="text-rose-700 hover:text-rose-950 font-bold ml-2">Закрити</button>`;
-        }
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = 'Оновити статуси';
-        }
+        if (!silent) setProbeBanner(`Не вдалося запустити перевірку: ${e.message || e}`, true);
+    } finally {
+        setButton(idleLabel);
     }
 }
 
