@@ -1733,3 +1733,35 @@ def test_hypotheses_payload_exposes_the_criteria_used_for_verdicts():
     res = assess_hypotheses([], [], [], {}, [], n_queries=0)
     assert res["criteria"] == {"min_queries": 30, "min_cell_queries": MIN_CELL_QUERIES,
                                "practical_gap_pts": PRACTICAL_GAP_PTS, "quality_tolerance_pts": 5.0}
+
+
+def test_hypotheses_overview_is_cached_until_runs_change():
+    from app.services import analytics
+    from app.database import get_connection
+    conn = get_connection()
+    run_id = conn.execute(
+        "INSERT INTO experiment_runs (created_at, title, description, models_json, prompts_json, categories_json, total_items, "
+        "completed_items, status, execution_mode, summary_json) VALUES ('2026-11-06 10:00:00', 'cache-test', '', '[]', '[]', '[]', 5, 5, "
+        "'completed', 'live_api', '{}')"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    stub = {"hypotheses": {"h1": {}, "h2": {}, "h3": {}}}
+    try:
+        analytics._HYPOTHESES_CACHE.update(key=None, value=None)
+        with patch.object(analytics, "compute_flexible_analytics", return_value=stub) as calc:
+            first = analytics.compute_hypotheses_overview()
+            analytics.compute_hypotheses_overview()
+            assert calc.call_count == 1 and first["available"] is True
+            conn = get_connection()
+            conn.execute("UPDATE experiment_runs SET completed_items = 6 WHERE id = ?", (run_id,))
+            conn.commit()
+            conn.close()
+            analytics.compute_hypotheses_overview()
+            assert calc.call_count == 2
+    finally:
+        conn = get_connection()
+        conn.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
+        conn.commit()
+        conn.close()
+        analytics._HYPOTHESES_CACHE.update(key=None, value=None)

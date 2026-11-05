@@ -20,6 +20,7 @@ from app.config import (
     get_model_config,
 )
 from app.database import (
+    compute_dataset_hash,
     get_connection,
     fetch_all_domains,
     fetch_all_queries,
@@ -820,24 +821,33 @@ def _build_analytics_payload(
     }
 
 
+_HYPOTHESES_CACHE: Dict[str, Any] = {"key": None, "value": None}
+
+
 def compute_hypotheses_overview() -> Dict[str, Any]:
-    """Вердикти за гіпотезами по всіх завершених серіях: показуються на головній сторінці."""
+    """Вердикти за гіпотезами по всіх завершених серіях для головної сторінки. Результат кешується, доки серії та датасет не змінилися."""
     conn = get_connection()
     try:
-        run_ids = [
-            r["id"] for r in conn.execute(
-                "SELECT id FROM experiment_runs WHERE execution_mode != 'sandbox' AND completed_items > 0 ORDER BY id"
+        runs = [
+            (r["id"], r["completed_items"], r["status"]) for r in conn.execute(
+                "SELECT id, completed_items, status FROM experiment_runs "
+                "WHERE execution_mode != 'sandbox' AND completed_items > 0 ORDER BY id"
             )
         ]
     finally:
         conn.close()
-    if not run_ids:
+    if not runs:
         return {"available": False, "runs": 0, "criteria": verdict_criteria()}
-    payload = compute_flexible_analytics(run_ids=run_ids, balanced_only=True)
+    key = (tuple(runs), compute_dataset_hash())
+    if _HYPOTHESES_CACHE["key"] == key:
+        return _HYPOTHESES_CACHE["value"]
+    payload = compute_flexible_analytics(run_ids=[r[0] for r in runs], balanced_only=True)
     hypotheses = payload.get("hypotheses")
-    if not hypotheses:
-        return {"available": False, "runs": len(run_ids), "criteria": verdict_criteria()}
-    return {"available": True, "runs": len(run_ids), "hypotheses": hypotheses, "criteria": verdict_criteria()}
+    result = {"available": bool(hypotheses), "runs": len(runs), "criteria": verdict_criteria()}
+    if hypotheses:
+        result["hypotheses"] = hypotheses
+    _HYPOTHESES_CACHE.update(key=key, value=result)
+    return result
 
 
 def compute_run_analytics(
