@@ -29,12 +29,11 @@ c:\Projects\llm_proj\
 ├── models_pricing.json           # Довідник тарифів моделей ($/1M вхідних і вихідних токенів) із прапорцями верифікації
 ├── rubric_v1.yaml                # Специфікація 5-бальної якірної рубрики оцінювання (NIST AI RMF 1.0)
 ├── requirements.txt              # Залежності Python (FastAPI, Uvicorn, HTTPX, Pydantic, PyYAML, Pytest)
-├── run.py                        # Точка запуску веб-сервера Uvicorn
 ├── tests.py                      # Повний набір модульних та інтеграційних тестів (16 автотестів pytest)
 ├── README.md                     # Загальний опис проєкту та швидкий старт
 ├── TECHNICAL_PASSPORT.md         # Цей інженерний технічний паспорт програмного комплексу
 ├── data\
-│   ├── llm_benchmark.db          # Реляційна база даних SQLite (усі таблиці, шаблони, серії та паспорти замірів)
+│   ├── llm_research.db          # Реляційна база даних SQLite (усі таблиці, шаблони, серії та паспорти замірів)
 │   ├── provider_probe.json       # Кеш останнього живого опитування провайдерів, балансів, моделей і лімітів
 │   └── proposed\
 │       └── expanded_queries_draft.json # Розширена чернетка датасету v3.0 (105 запитів із пастками та ескалаціями)
@@ -55,7 +54,7 @@ c:\Projects\llm_proj\
     ├── services\
     │   ├── classifier.py         # Нормалізація чисел, український стемінг, класифікатор Жаккара та RAG-пошук
     │   ├── prompt_builder.py     # Конструктор промптів P1–P5 із захистом Few-Shot (P3) від витоку еталону
-    │   ├── llm_client.py         # Уніфікований асинхронний клієнт API (Gemini, Groq, OpenRouter, OpenAI, Anthropic, Ollama)
+    │   ├── llm_runtime.py         # Уніфікований асинхронний клієнт API (Gemini, Groq, OpenRouter, OpenAI, Anthropic, Ollama)
     │   ├── model_discovery.py    # Живе опитування API провайдерів (/models), перевірка балансів, лімітів і статусів
     │   ├── evaluator.py          # Детерміноване ядро оцінки (FC, галюцинації, SS, FMT, Q_det, шлюз ескалації)
     │   ├── judge.py              # Сліпий незалежний LLM-суддя (крос-сімейна політика + SQLite-кеш)
@@ -71,7 +70,7 @@ c:\Projects\llm_proj\
 
 ---
 
-## 3. Схема реляційної бази даних SQLite (`data/llm_benchmark.db`)
+## 3. Схема реляційної бази даних SQLite (`data/llm_research.db`)
 
 Модуль [`app/database.py`](file:///c:/Projects/llm_proj/app/database.py) під час старту автоматично виконує `init_db()` з адитивними міграціями (`_ensure_column`), що гарантує збереження наявних експериментальних даних при розширенні схеми.
 
@@ -126,6 +125,14 @@ c:\Projects\llm_proj\
 - **Шлюз ескалації та автоматизація:** `requires_escalation` (підсумкове рішення), `escalation_regex`, `escalation_judge`, `escalation_disagreement`, `escalation_method`, `escalation_correct` (`1`, якщо рішення збіглося з `expected_escalation`), `automation_success` (`1`, якщо звернення безпечно автоматизовано).
 - **Оцінки за 5-бальною рубрикою (ШІ-суддя та експерт):** `relevance_score`, `factuality_score`, `completeness_score`, `clarity_score`, `format_score`, `policy_adherence_score`, `nist_composite_pct`, `rubric_composite_pct`, `rubric_evaluated` (`0/1`), `judge_model`, `judge_scores_json`, `judge_rationale_json`, `manual_scored` (`0/1`), `manual_annotator`, `manual_notes`.
 
+### 3.5a. Корпус знань і службові таблиці
+
+- **`kb_documents`, `kb_chunks`**: окремий корпус знань сфери. Кожен тестовий запит має фрагмент-відповідь, поруч можуть лежати дистрактори (`is_distractor = 1`) і документи з FAQ. Чернетки (`review_status = 'draft'`) у пошук не потрапляють.
+- **`query_gold_chunks`**: які фрагменти вважаються правильними для запиту; за ними рахується hit@1 і hit@3. Перефрази запиту діляться фрагментом оригіналу.
+- **`provider_status`**: результат останнього пошуку моделей по кожному провайдеру (зберігається між запусками, TTL пошуку 6 годин).
+- **`seed_markers`**: позначки про одноразове завантаження чернеток, щоб відхилені чернетки не поверталися.
+- **`queries`**: додано `variant_of`, `variant_type`, `lang`; **`experiment_runs.corpus_version`** фіксує відбиток корпусу, з яким виконано серію.
+
 ### 3.6. Допоміжні таблиці (`run_errors`, `judge_cache`, `validation_reports`)
 - **`run_errors`**: протоколює всі помилки API під час серійних експериментів (`run_id`, `query_code`, `model_id`, `prompt_code`, `repeat_index`, `error_type`, `error_message`, `attempts`, `created_at`).
 - **`judge_cache`**: персистентний кеш відповідей ШІ-судді за ключем `SHA-256(query + context + reference + answer + rubric_hash + judge_model)`. Унеможливлює повторну витрату лімітів судді на ідентичних відповідях.
@@ -163,7 +170,7 @@ c:\Projects\llm_proj\
 - **`P4` (Ланцюжок міркувань і самоперевірка / Chain-of-Thought + Self-Verification)**: вимагає внутрішньої перевірки відповідності кожної цифри наданому контексту перед формуванням підсумкового блоку `[ВІДПОВІДЬ КЛІЄНТУ]`.
 - **`P5` (Структурований вивід із шлюзом ескалації / Structured Output + Escalation Gate)**: задає обов'язкову 3-блочну структуру (`Коротке резюме` $\to$ `Покрокова інструкція / деталі` $\to$ явний службовий рядок `[РІШЕННЯ ШЛЮЗУ: АВТОМАТИЧНО | ЕСКАЛАЦІЯ НА ОПЕРАТОРА]`).
 
-### 4.3. Асинхронний клієнт LLM, маршрутизація та відмовостійкість (`app/services/llm_client.py`)
+### 4.3. Асинхронний клієнт LLM, маршрутизація та відмовостійкість (`app/services/llm_runtime.py`)
 1. **Маршрутизація провайдерів (`resolve_effective_provider`, `set_session_route`)**:
    - За замовчуванням усі моделі звертаються до свого **рідного провайдера (`native`)**: `gemini` $\to$ Google AI Studio, `groq` $\to$ Groq Cloud, `openai` $\to$ OpenAI API, `anthropic` $\to$ Anthropic API, `ollama` $\to$ локальний сервер Ollama (`http://localhost:11434`).
    - Для хмарних моделей `Groq`, `OpenAI` та `Anthropic`, які мають відповідник у каталозі `OpenRouter` (`OPENROUTER_FALLBACK_MAP`), користувач може увімкнути маршрут `openrouter` за замовчуванням або перемкнути його тимчасово на час поточного експерименту (`SESSION_ROUTE_OVERRIDES`).
@@ -303,7 +310,7 @@ c:\Projects\llm_proj\
 | `GET /api/experiments/active-prompt` | Опитування активного модального діалогу прийняття рішення при помилці API під час тесту |
 | `POST /api/experiments/resolve-prompt` | Передача обраного користувачем рішення (`wait_retry`, `switch_route`, `skip_model`, `end_early` тощо) |
 | `PUT /api/settings` | Зберігає API-ключі, список активних моделей, маршрути `model_routes` і гіперпараметри в `.env` |
-| `POST /api/models/probe-limits` | Запускає живе опитування всіх провайдерів (`probe_all_providers`), оновлюючи список моделей, баланси та статуси |
+| `POST /api/models/status/refresh` | Запускає у фоні пошук моделей і перевірку кожної увімкнованої моделі окремо; прогрес читається з `GET /api/models/status` (`probe`) |
 
 ---
 
@@ -311,14 +318,14 @@ c:\Projects\llm_proj\
 
 1. **Запуск веб-сервера**:
    ```powershell
-   python run.py
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
    або через `uvicorn`:
    ```powershell
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
    Веб-інтерфейс доступний у браузері за адресою: `http://127.0.0.1:8000`.
-2. **Запуск повного набору автотестів (`16/16` тестів)**:
+2. **Запуск повного набору автотестів (71 тест)**:
    ```powershell
    python -m pytest tests.py -v
    ```

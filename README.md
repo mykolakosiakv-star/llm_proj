@@ -60,47 +60,45 @@
 ## 2. Структура проєкту
 
 ```text
-c:\Projects\llm_proj\
+llm_proj\
 ├── app\
-│   ├── main.py                  # FastAPI сервер, маршрути HTTP API та життєвий цикл
-│   ├── config.py                # Каталог провайдерів і моделей, гіперпараметри та .env
-│   ├── database.py              # Ядро SQLite, адитивні міграції, версії промптів, кеш судді
-│   ├── models.py                # Pydantic-схеми запитів та відповідей API
-│   ├── seed_data.py             # Базовий набір 60 запитів FinCloud та 5 шаблонів промптів P1–P5
-│   ├── domain_datasets.py       # Мультидоменні набори запитів (IT, E-Commerce, Telecom) та профілі СППР
+│   ├── main.py                  # FastAPI: маршрути HTTP API та життєвий цикл
+│   ├── config.py                # Каталог провайдерів і моделей, параметри методики, .env
+│   ├── database.py              # SQLite: схема, адитивні міграції, реєстр моделей, корпус знань
+│   ├── models.py                # Pydantic-схеми запитів до API
+│   ├── seed_data.py             # Початкове наповнення: сфери, промпти P1-P5, запити, чернетки
+│   ├── domain_datasets.py       # Запити трьох сфер (IT, E-Commerce, Telecom) і профілі сфер
 │   ├── services\
-│   │   ├── classifier.py        # Нормалізація чисел normalize_numbers(), стемінг та класифікація Жаккара
-│   │   ├── prompt_builder.py    # Конструктор промптів P1–P5 із захистом Few-Shot від витоку еталону
-│   │   ├── llm_client.py        # Асинхронний клієнт API (Gemini, Groq, OpenRouter, OpenAI, Anthropic, Ollama)
-│   │   ├── model_discovery.py   # Живе опитування провайдерів (/models), перевірка балансів і лімітів
-│   │   ├── evaluator.py         # Метрики FC, SS, FMT, детектор галюцинацій, шлюз ескалації, Q_det
-│   │   ├── judge.py             # Сліпий LLM-суддя за рубрикою rubric_v1.yaml із кешуванням
-│   │   ├── stats.py             # Бутстреп-ДІ, критерії Вілкоксона/Фрідмана/Холма, Cliff's δ, Парето
-│   │   ├── experiment_runner.py # Оркестратор серійних експериментів, дооцінки, СППР та експорту
-│   │   ├── run_prompts.py       # Інтерактивні діалоги відновлення при помилках API під час тесту
-│   │   └── logger.py            # Потокобезпечний монітор етапів та живих логів
+│   │   ├── assistant.py         # Помічник: пошук знань, відповідь, рішення про оператора
+│   │   ├── retrieval.py         # BM25 з українським стеммінгом по корпусу знань, hit@1 і hit@3
+│   │   ├── prompt_builder.py    # Конструктор промптів P1-P5
+│   │   ├── classifier.py        # Нормалізація, стемінг, категорія запиту
+│   │   ├── evaluator.py         # Метрики відповіді, галюцинації, рішення про ескалацію
+│   │   ├── judge.py             # Незалежний LLM-суддя за рубрикою, кеш у базі
+│   │   ├── llm_runtime.py       # Клієнти API провайдерів і планувальник запитів (RPM, RPD)
+│   │   ├── model_discovery.py   # Пошук моделей, перевірка кожної моделі, статуси, лімітів
+│   │   ├── experiment_runner.py # Серії експериментів у фоні
+│   │   ├── analytics.py         # Зведені показники, матриці, фільтри
+│   │   ├── hypotheses.py        # Вердикти за гіпотезами H1-H3 з порогом даних
+│   │   ├── cascade.py           # Симуляція каскаду: дешева модель, сильна модель, оператор
+│   │   ├── decision_support.py  # Рекомендація моделі та пріоритети впровадження
+│   │   ├── kb_drafts.py         # Завантаження FAQ, чернетки від моделі, перевірка людиною
+│   │   ├── stats.py             # Довірчі інтервали, Вілкоксон, Фрідман, Холм
+│   │   ├── export_service.py    # Експорт таблиць (MD, CSV, LaTeX)
+│   │   └── logger.py            # Журнал подій і стан виконання
 │   └── static\
-│       ├── index.html           # Веб-інтерфейс дослідницького комплексу (6 вкладок + модальні вікна)
-│       ├── styles.css           # Стилі інтерфейсу, таблиць та теплових матриць
-│       └── js/                  # Клієнтська логіка за темами: core, providers, sandbox, assistant, experiments, analytics, dataset, settings
+│       ├── index.html           # Інтерфейс: Початок, Помічник, Експерименти, Результати, Дані, Моделі, Журнал
+│       ├── styles.css, tailwind.css, chart.umd.js
+│       └── js\                  # core, home, providers, sandbox, assistant, experiments, analytics, results, dataset, settings
 ├── scripts\
-│   ├── audit_dataset.py                 # Автоматичний аудит узгодженості датасету (100% pass)
-│   ├── generate_expanded_dataset_draft.py # Генератор чернетки розширеного датасету (105 запитів)
-│   ├── export_annotation_sample.py      # Експорт сліпої вибірки для ручної експертної розмітки
-│   ├── import_annotations.py            # Імпорт ручних оцінок експертів у БД
-│   └── validate_metrics.py              # Розрахунок Weighted Cohen's κ та кореляцій Спірмена/Кендалла
-├── data\
-│   ├── llm_benchmark.db                 # Основна реляційна база даних SQLite
-│   ├── provider_probe.json              # Кеш останньої діагностики API провайдерів та моделей
-│   └── proposed\
-│       └── expanded_queries_draft.json  # Чернетка розширеного датасету v3.0 (105 запитів)
-├── exports\                     # Автоматично згенеровані таблиці для диплома (.md, .csv, .tex)
-├── models_pricing.json          # Довідник тарифів провайдерів ($/1M вхідних та вихідних токенів)
-├── rubric_v1.yaml               # 5-бальна якірна рубрика оцінювання (NIST AI RMF 1.0)
-├── TECHNICAL_PASSPORT.md        # Повний інженерний технічний паспорт програмного комплексу
-├── tests.py                     # Автоматизовані модульні та інтеграційні тести (16 тестів pytest)
-├── requirements.txt             # Залежності Python
-└── run.py                       # Скрипт запуску веб-сервера
+│   ├── audit_dataset.py         # Аудит тестових запитів: покриття фактів, баланс, повтори, збіг із відповіддю
+│   ├── tailwind\                # Конфіг для збірки tailwind.css
+│   └── export_annotation_sample.py, import_annotations.py, validate_metrics.py   # Ручна оцінка та перевірка судді
+├── data\                        # llm_research.db (не в git), proposed\ із чернетками запитів
+├── docs\                        # Передача проєкту між етапами
+├── tests.py                     # pytest, працює на тимчасовій базі
+├── rubric_v1.yaml, models_pricing.json, requirements.txt
+└── CLAUDE.md                    # Контекст проєкту для Claude Code
 ```
 
 ---
@@ -109,7 +107,7 @@ c:\Projects\llm_proj\
 
 1. **Запуск веб-сервера (порт 8000):**
    ```powershell
-   python run.py
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
    або напряму через `uvicorn`:
    ```powershell
@@ -117,7 +115,7 @@ c:\Projects\llm_proj\
    ```
    Відкрийте у браузері: **http://127.0.0.1:8000**
 
-2. **Запуск повного набору автоматичних тестів (`16/16` тестів, без платних викликів API):**
+2. **Запуск повного набору автоматичних тестів (71 тест, без платних викликів API; працюють на тимчасовій базі):**
    ```powershell
    pytest tests.py -v
    ```
