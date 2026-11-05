@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# Тести підміняють каталог даних, щоб не чіпати робочу базу
+DATA_DIR = Path(os.environ.get("LLM_AUTOBENCH_DATA") or BASE_DIR / "data")
 EXPORTS_DIR = BASE_DIR / "exports"
 ENV_FILE = BASE_DIR / ".env"
 PRICING_FILE = BASE_DIR / "models_pricing.json"

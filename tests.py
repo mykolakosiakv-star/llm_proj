@@ -2,13 +2,18 @@
 
 import asyncio
 import json
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Каталог даних підміняється до імпорту застосунку: тести працюють на чистій базі, а не на робочій
+os.environ["LLM_AUTOBENCH_DATA"] = tempfile.mkdtemp(prefix="autobench_tests_")
 
 from app.main import app
 import app.database as db_module
@@ -64,6 +69,9 @@ from scripts.audit_dataset import run_dataset_audit
 def setup_database():
     init_db()
     seed_database_if_needed()
+    # Модель знайдена колись автопошуком, у коді каталогу її немає: тести судді потребують її родини
+    from app.database import upsert_model_registry_entry
+    upsert_model_registry_entry({"id": "gpt-5.4-nano", "provider": "openai", "model_id": "gpt-5.4-nano", "display_name": "gpt-5.4-nano", "source": "discovered"})
 
 
 def test_normalize_numbers_and_single_digit_tokens():
