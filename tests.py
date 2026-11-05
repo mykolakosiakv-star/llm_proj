@@ -1401,3 +1401,15 @@ def test_manual_limit_edit_is_not_overwritten_by_discovery():
     limits = fetch_model_registry_by_id("custom:limit-edit")["limits"]
     assert limits["rpm"] == 5 and limits["limits_source"]["rpm"] == "manual"
     delete_custom_model_from_registry("custom:limit-edit")
+
+
+def test_ping_timeout_gets_a_readable_message():
+    import httpx
+    from app.services.model_discovery import _ping_single_model
+    stub = AsyncMock(side_effect=httpx.ReadTimeout(""))
+    async def run():
+        with patch("httpx.AsyncClient.post", new=stub):
+            async with httpx.AsyncClient() as client:
+                return await _ping_single_model(client=client, provider="gemini", api_model_name="m", api_key="k", base_url="")
+    status, code, _, message, _ = asyncio.run(run())
+    assert status == "offline" and code is None and "очікування" in message

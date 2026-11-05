@@ -710,7 +710,8 @@ async def _ping_single_model(
             )
     except Exception as exc:
         lat = int((time.perf_counter() - t0) * 1000)
-        st, msg = classify_api_response(provider, None, raw_text=str(exc), is_network_error=True)
+        reason = "Час очікування відповіді вичерпано" if isinstance(exc, httpx.TimeoutException) else (str(exc) or type(exc).__name__)
+        st, msg = classify_api_response(provider, None, raw_text=reason, is_network_error=True)
         return st, None, lat, msg, {}
 
     lat = int((time.perf_counter() - t0) * 1000)
