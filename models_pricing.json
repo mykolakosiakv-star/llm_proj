@@ -1,0 +1,128 @@
+{
+  "gemini-2.5-flash-lite": {
+    "input_per_1m": 0.075,
+    "output_per_1m": 0.30,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Google AI Studio (доступний безкоштовний рівень Free Tier)"
+  },
+  "gemini-3.1-flash-lite": {
+    "input_per_1m": 0.10,
+    "output_per_1m": 0.40,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Google AI Studio для Gemini 3.1 Flash-Lite"
+  },
+  "gemini-3-flash": {
+    "input_per_1m": 0.15,
+    "output_per_1m": 0.60,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Google AI Studio для Gemini 3.0 Flash"
+  },
+  "gemini-3-flash-preview": {
+    "input_per_1m": 0.15,
+    "output_per_1m": 0.60,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Google AI Studio для Gemini 3.0 Flash Preview"
+  },
+  "gemma-4-26b-a4b-it": {
+    "input_per_1m": 0.0,
+    "output_per_1m": 0.0,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Відкрита модель Gemma 4 26B у Google AI Studio Free Tier"
+  },
+  "gemma-4-31b-it": {
+    "input_per_1m": 0.0,
+    "output_per_1m": 0.0,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Відкрита модель Gemma 4 31B у Google AI Studio Free Tier"
+  },
+  "gemini-2.5-flash": {
+    "input_per_1m": 0.15,
+    "output_per_1m": 0.60,
+    "price_date": "2026-10-01",
+    "source_url": "https://ai.google.dev/pricing",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Google AI Studio для Gemini 2.5 Flash"
+  },
+  "llama-3.1-8b-instant": {
+    "input_per_1m": 0.05,
+    "output_per_1m": 0.08,
+    "price_date": "2026-10-01",
+    "source_url": "https://groq.com/pricing/",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Groq Cloud для Llama 3.1 8B Instant"
+  },
+  "llama-3.3-70b-versatile": {
+    "input_per_1m": 0.59,
+    "output_per_1m": 0.79,
+    "price_date": "2026-10-01",
+    "source_url": "https://groq.com/pricing/",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Тариф Groq Cloud для Llama 3.3 70B"
+  },
+  "gpt-4o-mini": {
+    "input_per_1m": 0.15,
+    "output_per_1m": 0.60,
+    "price_date": "2026-10-01",
+    "source_url": "https://openai.com/api/pricing/",
+    "verified": true,
+    "is_free_tier": false,
+    "notes_uk": "Тариф OpenAI API для GPT-4o mini"
+  },
+  "gpt-4o": {
+    "input_per_1m": 2.50,
+    "output_per_1m": 10.00,
+    "price_date": "2026-10-01",
+    "source_url": "https://openai.com/api/pricing/",
+    "verified": true,
+    "is_free_tier": false,
+    "notes_uk": "Тариф OpenAI API для GPT-4o"
+  },
+  "ollama-local": {
+    "input_per_1m": 0.0,
+    "output_per_1m": 0.0,
+    "price_date": "2026-10-01",
+    "source_url": "https://ollama.com",
+    "verified": true,
+    "is_free_tier": true,
+    "notes_uk": "Локальне виконання на власному обладнанні"
+  },
+  "claude-3-5-haiku": {
+    "input_per_1m": 0.80,
+    "output_per_1m": 4.00,
+    "price_date": "2026-10-23",
+    "source_url": "https://www.anthropic.com/pricing",
+    "verified": true,
+    "is_free_tier": false,
+    "notes_uk": "Тариф Anthropic API для Claude 3.5 Haiku"
+  },
+  "claude-3-5-sonnet": {
+    "input_per_1m": 3.00,
+    "output_per_1m": 15.00,
+    "price_date": "2026-10-23",
+    "source_url": "https://www.anthropic.com/pricing",
+    "verified": true,
+    "is_free_tier": false,
+    "notes_uk": "Тариф Anthropic API для Claude 3.5 Sonnet"
+  }
+}

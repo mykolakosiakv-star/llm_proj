@@ -1,0 +1,1414 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM-AutoBench | Аналіз та тестування мовних моделей</title>
+    <link rel="stylesheet" href="/static/tailwind.css">
+    <script src="/static/chart.umd.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <header class="bg-white border-b border-slate-300 sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-lg bg-slate-900 text-white flex items-center justify-center font-bold text-xs tracking-wider">
+                    AB
+                </div>
+                <div>
+                    <div class="font-bold text-slate-900 text-sm sm:text-base leading-tight">
+                        LLM-AutoBench
+                    </div>
+                    <div class="text-[11px] text-slate-500">
+                        Стенд тестування та оцінки мовних моделей
+                    </div>
+                </div>
+            </div>
+
+            <nav class="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button onclick="switchTab('sandbox')" id="tabBtn-sandbox" class="nav-pill active px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Помічник
+                </button>
+                <button onclick="switchTab('experiments')" id="tabBtn-experiments" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Експерименти
+                </button>
+                <button onclick="switchTab('analytics')" id="tabBtn-analytics" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Результати
+                </button>
+                <button onclick="switchTab('dataset')" id="tabBtn-dataset" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Набори даних і промпти
+                </button>
+                <button onclick="switchTab('settings')" id="tabBtn-settings" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium">
+                    Провайдери і моделі
+                </button>
+                <button onclick="switchTab('logs')" id="tabBtn-logs" class="nav-pill px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5">
+                    <span>Журнал</span>
+                    <span id="navLogsCountBadge" class="px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-800 text-[10px] font-mono font-bold">0</span>
+                </button>
+            </nav>
+
+            <div id="envHeaderStatus" onclick="switchTab('settings')" class="cursor-pointer text-xs px-2.5 py-1 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 font-medium text-slate-700">
+                Перевірка ключів...
+            </div>
+        </div>
+    </header>
+
+    <div id="liveStatusBanner" class="bg-slate-900 text-white border-b border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 py-2 space-y-1.5">
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div class="flex items-center gap-2">
+                    <span id="liveStatusDot" class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+                    <span class="font-semibold text-slate-400">Статус виконання:</span>
+                    <span id="liveStageText" class="font-medium text-white">Очікування</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-4 text-slate-300">
+                    <span>Модель: <b id="liveActiveModel" class="text-blue-300">-</b></span>
+                    <span>Промпт: <b id="liveActivePrompt" class="text-indigo-300">-</b></span>
+                    <span>Запит: <b id="liveActiveQuery" class="text-emerald-300">-</b></span>
+                    <button onclick="switchTab('logs')" class="px-2.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-medium">
+                        Відкрити журнал
+                    </button>
+                </div>
+            </div>
+
+            <div id="liveProgressBarWrap" class="hidden pt-1">
+                <div class="flex justify-between text-[11px] text-slate-300 mb-1">
+                    <span id="liveProgressLabel">Виконання: 0 / 0</span>
+                    <button onclick="cancelBatchExperiment()" class="text-rose-400 hover:text-rose-300 font-semibold">
+                        Зупинити виконання
+                    </button>
+                </div>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div id="liveProgressBarFill" class="bg-blue-500 h-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-5 space-y-5">
+
+        <!-- ВКЛАДКА: ПОМІЧНИК -->
+        <section id="tab-sandbox" class="space-y-5">
+            <div class="card-box p-5 space-y-4 max-w-3xl">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-base">Помічник служби підтримки</h2>
+                    <p class="text-xs text-slate-500 mt-1">
+                        Введіть запит клієнта. Помічник знайде відповідь у базі знань обраної сфери і підкаже, чи можна відповісти автоматично, чи запит краще передати оператору.
+                    </p>
+                </div>
+
+                <div id="assistantErrorBox" class="hidden p-3 rounded-lg border border-rose-300 bg-rose-50 text-rose-800 text-sm"></div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label for="assistantDomain" class="block text-xs font-medium text-slate-700 mb-1">Предметна сфера</label>
+                        <select id="assistantDomain" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"></select>
+                    </div>
+                    <div>
+                        <label for="assistantModel" class="block text-xs font-medium text-slate-700 mb-1">Модель</label>
+                        <select id="assistantModel" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"></select>
+                        <p id="assistantModelHint" class="text-[11px] text-slate-500 mt-1"></p>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="assistantQuery" class="block text-xs font-medium text-slate-700 mb-1">Запит клієнта</label>
+                    <textarea id="assistantQuery" rows="3" class="w-full border border-slate-300 rounded-lg p-3 text-sm" placeholder="Наприклад: як відкрити картку без відвідування відділення?"></textarea>
+                </div>
+
+                <button onclick="askAssistant()" id="assistantAskBtn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm">
+                    Отримати відповідь
+                </button>
+            </div>
+
+            <div id="assistantResult" class="hidden card-box p-5 space-y-4 max-w-3xl">
+                <div id="assistantDecision" class="border-l-4 pl-3 py-1 text-sm"></div>
+                <div>
+                    <div class="text-xs font-medium text-slate-500 mb-1">Відповідь клієнту</div>
+                    <div id="assistantAnswer" class="text-sm text-slate-900 whitespace-pre-line leading-relaxed"></div>
+                </div>
+                <div>
+                    <div class="text-xs font-medium text-slate-500 mb-1">Джерела з бази знань</div>
+                    <ul id="assistantSources" class="space-y-2 text-xs text-slate-700"></ul>
+                </div>
+                <p id="assistantMeta" class="text-[11px] text-slate-500 border-t border-slate-200 pt-3"></p>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА: ЕКСПЕРИМЕНТИ -->
+        <section id="tab-experiments" class="hidden space-y-5">
+            <details class="card-box">
+                <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-900">
+                    Пробний запит до моделі з розрахунком метрик
+                </summary>
+                <div class="p-5 space-y-5 border-t border-slate-200">
+            <div class="card-box p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                    <div>
+                        <h2 class="font-bold text-slate-900 text-base">
+                            Тестування окремого запиту
+                        </h2>
+                        <p class="text-xs text-slate-500">
+                            Оберіть типовий запит зі списку або введіть власний, вкажіть модель та стратегію промпту P1-P5
+                        </p>
+                    </div>
+                    <button onclick="switchTab('settings')" class="text-xs px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium">
+                        Керування моделями
+                    </button>
+                </div>
+
+                <div id="sandboxErrorBox" class="hidden p-3.5 rounded-lg bg-rose-50 border border-rose-300 text-rose-800 text-xs sm:text-sm font-medium"></div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                    <div class="lg:col-span-7 space-y-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <div class="sm:col-span-1">
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">
+                                    Предметна сфера:
+                                </label>
+                                <select id="sandboxDomainFilter" onchange="onSandboxDomainChange()" class="w-full border border-slate-300 rounded-lg px-2.5 py-2 text-xs bg-white font-medium">
+                                    <option value="all">Усі сфери</option>
+                                    <option value="fintech" selected>Фінтех / Банкінг</option>
+                                    <option value="it_helpdesk">ІТ / SaaS Helpdesk</option>
+                                    <option value="ecommerce">E-Commerce / Доставка</option>
+                                    <option value="telecom">Телеком / Зв'язок</option>
+                                </select>
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">
+                                    Типовий запит із бази або довільне звернення:
+                                </label>
+                                <select id="sandboxQueryPreset" onchange="onSelectPresetQuery()" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm bg-slate-50">
+                                    <option value="">Довільний запит користувача</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">Текст запиту:</label>
+                            <textarea id="sandboxUserQuery" rows="3" class="w-full border border-slate-300 rounded-lg p-3 text-sm" placeholder="Введіть запит користувача..."></textarea>
+                        </div>
+
+                        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-slate-700">Шаблон обраного промпту (<span id="sandboxPromptPreviewCode" class="text-indigo-700">P3</span>):</span>
+                                <button onclick="switchTab('dataset')" class="text-[11px] text-blue-600 hover:underline font-medium">
+                                    Редагувати шаблони
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                                <div>
+                                    <div class="font-medium text-slate-500 mb-0.5">Системна інструкція:</div>
+                                    <pre id="sandboxSystemTemplatePreview" class="p-2 rounded bg-white border border-slate-200 text-slate-800 whitespace-pre-wrap font-mono max-h-28 overflow-y-auto"></pre>
+                                </div>
+                                <div>
+                                    <div class="font-medium text-slate-500 mb-0.5">Користувацький шаблон:</div>
+                                    <pre id="sandboxUserTemplatePreview" class="p-2 rounded bg-white border border-slate-200 text-slate-800 whitespace-pre-wrap font-mono max-h-28 overflow-y-auto"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="lg:col-span-5 flex flex-col justify-between space-y-3">
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Мовна модель:</label>
+                                <select id="sandboxModelSelect" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Стратегія промпту (P1-P5):</label>
+                                <select id="sandboxPromptSelect" onchange="updateSandboxPromptPreview()" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1">Модель-суддя для оцінки за рубрикою (опціонально):</label>
+                                <select id="sandboxJudgeSelect" class="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
+                                    <option value="">Без судді (алгоритмічна оцінка)</option>
+                                </select>
+                            </div>
+                            <div id="sandboxPromptStrategyDesc" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700"></div>
+                        </div>
+
+                        <button onclick="runSandboxPipeline()" id="runSandboxBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-sm transition">
+                            Виконати запит
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="sandboxResultContainer" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-5">
+                <div class="lg:col-span-7 space-y-4">
+                    <div class="card-box p-5 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                            <div>
+                                <span class="text-[11px] font-semibold uppercase text-blue-600">Згенерована відповідь</span>
+                                <h3 id="resModelAndPromptTitle" class="font-bold text-slate-900 text-sm sm:text-base">-</h3>
+                            </div>
+                            <div id="resAutomationGateBadge"></div>
+                        </div>
+
+                        <div id="resGeneratedAnswer" class="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-800 whitespace-pre-line leading-relaxed"></div>
+
+                        <div class="bg-emerald-50/60 border border-emerald-200 rounded-lg p-3.5 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-emerald-900">Еталонна відповідь із бази знань</span>
+                                <span id="resMatchedQueryCode" class="text-xs font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded"></span>
+                            </div>
+                            <p id="resReferenceAnswer" class="text-xs text-slate-700 leading-relaxed"></p>
+                            <div id="resKeywordsCheckList" class="pt-1 flex flex-wrap gap-1.5 items-center"></div>
+                        </div>
+
+                        <details open class="pt-1">
+                            <summary class="cursor-pointer text-xs font-semibold text-blue-600">
+                                Сформований текст промпту з підставленим контекстом
+                            </summary>
+                            <pre id="resFullRenderedPrompt" class="mt-2 p-3 bg-slate-900 text-slate-100 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap font-mono max-h-64"></pre>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-5">
+                    <div class="card-box p-5 space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">Показники якості відповіді</h3>
+                                <p class="text-xs text-slate-500">Автоматичний розрахунок метрик за фактами та структурою</p>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-[11px] text-slate-500 block">Композит Q<sub>det</sub></span>
+                                <span id="resIntegralScoreBig" class="text-2xl font-extrabold text-blue-600">-%</span>
+                            </div>
+                        </div>
+
+                        <div id="resPercentMetricsBars" class="space-y-2.5 text-xs"></div>
+
+                        <div class="pt-2 border-t border-slate-200">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-xs font-semibold text-slate-600">Критерії рубрики (шкала 1-5):</span>
+                                <span id="resRubricModeBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">алгоритмічна оцінка</span>
+                            </div>
+                            <div id="resNistFiveBoxes" class="grid grid-cols-5 gap-1.5 text-center"></div>
+                        </div>
+
+                        <div id="resOperationalBoxes" class="pt-2 border-t border-slate-200 grid grid-cols-3 gap-2 text-center text-xs"></div>
+                    </div>
+                </div>
+            </div>
+                </div>
+            </details>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                <div class="lg:col-span-5 card-box p-5 space-y-4">
+                    <div class="border-b border-slate-200 pb-2.5 flex items-center justify-between">
+                        <div>
+                            <h2 class="font-bold text-slate-900 text-base">Серійний експеримент</h2>
+                            <p class="text-xs text-slate-500">Пакетне тестування обраних моделей, промптів і категорій</p>
+                        </div>
+                        <button onclick="switchTab('settings')" class="text-[11px] text-blue-600 hover:underline font-medium">
+                            Налаштувати моделі
+                        </button>
+                    </div>
+
+                    <div id="expErrorBox" class="hidden p-3 rounded-lg bg-rose-50 border border-rose-300 text-rose-800 text-xs font-medium"></div>
+
+                    <div class="space-y-3 text-xs sm:text-sm">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Назва серії:</label>
+                            <input id="expTitleInput" type="text" value="Порівняльний тест моделей та промптів" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Предметна сфера типових запитів:</label>
+                            <select id="expDomainSelect" onchange="onExpDomainSelectChange()" class="w-full border border-blue-300 rounded-lg px-3 py-1.5 bg-blue-50/40 font-semibold text-slate-800 text-xs">
+                                <option value="fintech">Фінтех та Інтернет-банкінг (FinCloud)</option>
+                                <option value="it_helpdesk">ІТ-підтримка та SaaS-сервіси (CloudOps)</option>
+                                <option value="ecommerce">Електронна комерція та логістика (MarketHub)</option>
+                                <option value="telecom">Телекомунікації та інтернет (TelecomNet)</option>
+                                <option value="all">Усі предметні сфери разом (мульти-доменний тест)</option>
+                            </select>
+                            <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-700">
+                                <input type="checkbox" id="expEqualDomainSample" checked onchange="updateBatchExperimentEstimate()" class="rounded text-blue-600">
+                                <span>Однакова вибірка по сферах (стратифікований відбір із фіксованим seed)</span>
+                            </label>
+                            <div id="expDomainRiskDesc" class="mt-1 text-[11px] text-slate-500">
+                                Фінансовий сектор: суворі числові ліміти, тарифи та обов'язкова ескалація при ризиках безпеки.
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                                <label class="font-semibold text-slate-700">Моделі для тестування:</label>
+                                <div class="flex items-center gap-1.5 text-[11px]">
+                                    <button type="button" onclick="toggleAllExpModelsCheckboxes(true)" class="text-blue-600 hover:underline">Обрати всі</button>
+                                    <span class="text-slate-300">|</span>
+                                    <button type="button" onclick="toggleAllExpModelsCheckboxes(false)" class="text-slate-500 hover:underline">Зняти всі</button>
+                                    <span class="text-slate-300">|</span>
+                                    <button type="button" onclick="switchTab('settings')" class="text-indigo-600 hover:underline font-medium">До списку провайдерів</button>
+                                </div>
+                            </div>
+                            <div id="expModelsCheckboxes" class="space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200 max-h-48 overflow-y-auto"></div>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Варіанти промптів (P1-P5):</label>
+                            <div id="expPromptsCheckboxes" class="space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200"></div>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Категорії запитів:</label>
+                            <div id="expCategoriesCheckboxes" class="grid grid-cols-2 gap-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200"></div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-1">Запитів на категорію (1-12):</label>
+                                <input id="expMaxQueriesInput" type="number" min="1" max="12" value="2" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-700 mb-1">Кількість повторів (1-5):</label>
+                                <input id="expRepeatsInput" type="number" min="1" max="5" value="1" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <label class="font-semibold text-slate-700">Режим подачі контексту (Гіпотеза H2):</label>
+                                <div class="flex items-center gap-1.5 text-xs">
+                                    <span class="text-slate-600">Top-K пошуку:</span>
+                                    <input id="expTopKInput" type="number" min="1" max="10" value="3" class="w-14 border border-slate-300 rounded px-2 py-0.5 bg-white text-center font-semibold">
+                                </div>
+                            </div>
+                            <div id="expContextModesCheckboxes" class="space-y-1 text-xs">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" name="expContextMode" value="gold_context" checked class="rounded text-blue-600">
+                                    <span><b>gold_context</b>: еталонний контекст запиту (стеля якості)</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" name="expContextMode" value="retrieved_context" class="rounded text-blue-600">
+                                    <span><b>retrieved_context</b>: автоматичний пошук BM25 Top-K по базі домену</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" name="expContextMode" value="no_context" class="rounded text-blue-600">
+                                    <span><b>no_context</b>: без контексту (базова лінія)</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">
+                                Модель-суддя для оцінки за рубрикою (опціонально):
+                            </label>
+                            <select id="expJudgeModelSelect" onchange="updateBatchExperimentEstimate()" class="w-full border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-xs">
+                                <option value="">Без судді (алгоритмічна оцінка)</option>
+                            </select>
+                            <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-600">
+                                <input type="checkbox" id="expAllowSelfJudge" class="rounded text-indigo-600">
+                                <span>Дозволити самооцінювання (позначатиметься як self_judged=1)</span>
+                            </label>
+                        </div>
+
+                        <div id="expEstimateBox" class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
+                            <div class="font-semibold text-slate-800">Прогноз перед запуском</div>
+                            <div id="expEstimateContent" class="text-slate-600">Розрахунок обсягу викликів...</div>
+                        </div>
+
+                        <button onclick="startNewBatchExperiment()" id="startBatchExpBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm transition">
+                            Запустити серію
+                        </button>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-7 space-y-4">
+                    <div class="card-box p-5">
+                        <div class="flex items-center justify-between mb-2.5">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">Історія серій експериментів</h3>
+                                <p class="text-[11px] text-slate-500">Оберіть серію для перегляду замірів або аналітики</p>
+                            </div>
+                        </div>
+                        <div id="experimentRunsListContainer" class="space-y-2 max-h-60 overflow-y-auto text-xs"></div>
+                    </div>
+
+                    <div class="card-box p-5 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">
+                                    Таблиця виконаних замірів
+                                </h3>
+                                <p class="text-[11px] text-slate-500">
+                                    Натисніть на рядок, щоб відкрити деталі запиту, згенеровану відповідь і розрахунок метрик
+                                </p>
+                            </div>
+                            <div class="flex flex-wrap gap-1.5 text-xs items-center">
+                                <select id="logFilterRunSelect" onchange="onChangeLogTableRun()" class="border border-blue-400 bg-blue-50 text-blue-900 font-semibold rounded px-2 py-1">
+                                </select>
+                                <select id="logFilterModel" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
+                                    <option value="all">Усі моделі</option>
+                                </select>
+                                <select id="logFilterPrompt" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
+                                    <option value="all">Усі промпти</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto max-h-96">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead class="bg-slate-100 text-slate-700 sticky top-0">
+                                    <tr>
+                                        <th class="py-2 px-2">Запит</th>
+                                        <th class="py-2 px-2">Модель</th>
+                                        <th class="py-2 px-2">Промпт</th>
+                                        <th class="py-2 px-2 text-center">Q<sub>det</sub>, %</th>
+                                        <th class="py-2 px-2 text-center">Повнота FC, %</th>
+                                        <th class="py-2 px-2 text-center">Галюц.</th>
+                                        <th class="py-2 px-2 text-center">Час, мс</th>
+                                        <th class="py-2 px-2 text-center">Токени</th>
+                                        <th class="py-2 px-2 text-center">Вартість ($/1M)</th>
+                                        <th class="py-2 px-2 text-center">Деталі</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="experimentItemsLogBody" class="divide-y divide-slate-200"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА: АНАЛІТИКА -->
+        <section id="tab-analytics" class="hidden space-y-5">
+            <div id="analyticsEmptyState" class="card-box p-10 text-center space-y-3">
+                <h3 class="font-bold text-slate-900 text-base">Немає завершених серій експериментів</h3>
+                <p class="text-xs sm:text-sm text-slate-600 max-w-xl mx-auto">
+                    Для побудови порівняльних таблиць та графіків налаштуйте підключення у вкладці «Провайдери і моделі» та запустіть тестування у вкладці «Експерименти».
+                </p>
+                <div class="pt-2 flex justify-center gap-3">
+                    <button onclick="switchTab('settings')" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs sm:text-sm font-semibold">
+                        Провайдери і моделі
+                    </button>
+                    <button onclick="switchTab('experiments')" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold">
+                        Перейти до експериментів
+                    </button>
+                </div>
+            </div>
+
+            <div id="analyticsContentWrap" class="hidden space-y-5">
+                <div id="analyticsNoticesBanner" class="space-y-2"></div>
+
+                <div class="card-box p-5 space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                        <div>
+                            <h2 class="font-bold text-slate-900 text-base">
+                                Параметри вибірки та фільтрація результатів
+                            </h2>
+                            <p class="text-xs text-slate-500">
+                                Оберіть одну або декілька серій експериментів і відфільтруйте моделі, промпти та категорії запитів
+                            </p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span id="analyticsRunMeta" class="text-xs font-semibold bg-blue-50 text-blue-800 px-3 py-1.5 rounded-lg border border-blue-200"></span>
+                            <button onclick="exportManualSampleCsv()" class="px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-xs font-semibold">
+                                Вибірка для ручної оцінки (CSV)
+                            </button>
+                            <button onclick="triggerImportManualSampleCsv()" class="px-3 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-semibold">
+                                Імпорт ручної оцінки (CSV)
+                            </button>
+                            <input type="file" id="manualSampleCsvInput" accept=".csv" class="hidden" onchange="handleImportManualSampleCsv(event)">
+                            <button onclick="openExportModal()" class="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm">
+                                Експорт таблиць (MD / CSV / LaTeX)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-6 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs">
+                        <label class="flex items-center gap-2 cursor-pointer font-medium text-slate-800">
+                            <input type="checkbox" id="anBalancedOnlyCheckbox" checked onchange="applyFlexibleAnalyticsFilters()" class="rounded text-blue-600">
+                            <span>Збалансований перетин вибірки (спільні запити для всіх обраних умов)</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                            <input type="checkbox" id="anIncludeSelfJudgedCheckbox" onchange="applyFlexibleAnalyticsFilters()" class="rounded text-indigo-600">
+                            <span>Включити самооцінювання (self_judged=1) у розрахунок рубрики</span>
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 text-xs">
+                        <div class="lg:col-span-4 bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="font-bold text-slate-800">Серії експериментів:</span>
+                                <div class="flex gap-1.5">
+                                    <button onclick="selectAllAnalyticsRuns(true)" class="text-[11px] text-blue-600 hover:underline font-medium">Усі</button>
+                                    <span class="text-slate-300">|</span>
+                                    <button onclick="selectAllAnalyticsRuns(false)" class="text-[11px] text-slate-600 hover:underline">Остання</button>
+                                </div>
+                            </div>
+                            <div id="analyticsRunsCheckboxes" class="space-y-1.5 max-h-36 overflow-y-auto pr-1"></div>
+                        </div>
+
+                        <div class="lg:col-span-3 bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="font-bold text-slate-800">Моделі:</span>
+                                <button onclick="toggleAllSubFilters('anModel', true)" class="text-[11px] text-blue-600 hover:underline font-medium">Усі</button>
+                            </div>
+                            <div id="analyticsModelsFilterBox" class="space-y-1.5 max-h-36 overflow-y-auto pr-1"></div>
+                        </div>
+
+                        <div class="lg:col-span-2 bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="font-bold text-slate-800">Промпти:</span>
+                                <button onclick="toggleAllSubFilters('anPrompt', true)" class="text-[11px] text-blue-600 hover:underline font-medium">Усі</button>
+                            </div>
+                            <div id="analyticsPromptsFilterBox" class="space-y-1.5 max-h-36 overflow-y-auto pr-1"></div>
+                        </div>
+
+                        <div class="lg:col-span-3 bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="font-bold text-slate-800">Категорії:</span>
+                                <button onclick="toggleAllSubFilters('anCategory', true)" class="text-[11px] text-blue-600 hover:underline font-medium">Усі</button>
+                            </div>
+                            <div id="analyticsCategoriesFilterBox" class="space-y-1.5 max-h-36 overflow-y-auto pr-1"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="conclusionCard" class="card-box p-5 space-y-4 hidden">
+                    <h3 class="font-semibold text-slate-900 text-base">Висновок</h3>
+                    <p id="conclusionHeadline" class="text-sm text-slate-800"></p>
+                    <dl id="conclusionTradeoffs" class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm"></dl>
+                    <ul id="conclusionCaveats" class="list-disc pl-5 space-y-1 text-xs text-slate-600"></ul>
+                </div>
+
+                <div id="cascadeCard" class="card-box p-5 space-y-4 hidden">
+                    <div>
+                        <h3 class="font-semibold text-slate-900 text-base">Каскад: дешева модель першою</h3>
+                        <p class="text-xs text-slate-500 mt-1">
+                            Розрахунок на вже зібраних результатах, без нових викликів API. Дешева модель відповідає першою, якщо вона просить допомоги, запит отримує сильна, а якщо й вона не впевнена, його бере оператор.
+                        </p>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                        <div>
+                            <label for="cascadeCheap" class="block text-xs font-medium text-slate-700 mb-1">Дешева модель</label>
+                            <select id="cascadeCheap" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"></select>
+                        </div>
+                        <div>
+                            <label for="cascadeStrong" class="block text-xs font-medium text-slate-700 mb-1">Сильна модель</label>
+                            <select id="cascadeStrong" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"></select>
+                        </div>
+                        <div>
+                            <label for="cascadePrompt" class="block text-xs font-medium text-slate-700 mb-1">Стратегія промпту</label>
+                            <select id="cascadePrompt" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"></select>
+                        </div>
+                        <div>
+                            <label for="cascadeContext" class="block text-xs font-medium text-slate-700 mb-1">Контекст</label>
+                            <select id="cascadeContext" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white">
+                                <option value="">Усі режими</option>
+                                <option value="no_context">Без контексту</option>
+                                <option value="gold_context">Еталонний контекст</option>
+                                <option value="retrieved_context">Результат пошуку</option>
+                            </select>
+                        </div>
+                    </div>
+                    <fieldset>
+                        <legend class="text-xs font-medium text-slate-700 mb-1">Одразу сильній моделі (ризикові категорії)</legend>
+                        <div id="cascadeRiskyCategories" class="flex flex-wrap gap-x-4 gap-y-1 text-sm"></div>
+                    </fieldset>
+                    <button onclick="runCascadeSimulation()" id="cascadeRunBtn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm">
+                        Розрахувати
+                    </button>
+                    <div id="cascadeError" class="hidden text-sm text-rose-800"></div>
+                    <div id="cascadeResult" class="hidden space-y-3">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="text-xs text-slate-500 border-b border-slate-200">
+                                    <tr>
+                                        <th class="py-2 pr-3 font-medium">Варіант</th>
+                                        <th class="py-2 pr-3 font-medium">Автоматично</th>
+                                        <th class="py-2 pr-3 font-medium">Оператору</th>
+                                        <th class="py-2 pr-3 font-medium">Пропущені ескалації</th>
+                                        <th class="py-2 pr-3 font-medium">Якість автовідповідей</th>
+                                        <th class="py-2 pr-3 font-medium">Галюцинації</th>
+                                        <th class="py-2 font-medium">Ціна за 1000 запитів</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cascadeTableBody"></tbody>
+                            </table>
+                        </div>
+                        <p id="cascadeSummary" class="text-sm text-slate-800"></p>
+                        <ul id="cascadeCaveats" class="list-disc pl-5 space-y-1 text-xs text-slate-600"></ul>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="analyticsKpiGrid"></div>
+
+                <!-- БЛОК ПІДТРИМКИ ПРИЙНЯТТЯ РІШЕНЬ (DECISION SUPPORT ADVISOR) -->
+                <div id="decisionSupportCard" class="card-box p-5 space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-sm sm:text-base">
+                                Вибір під пріоритети служби підтримки
+                            </h3>
+                            <p class="text-xs text-slate-600">
+                                Модель і стратегія промпту залежно від того, що для вас важливіше: якість, швидкість, ціна чи безпека
+                            </p>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5" id="deploymentPresetButtons">
+                            <button type="button" onclick="selectDeploymentPreset('balanced')" id="presetBtn-balanced" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white shadow-sm transition">
+                                Збалансований
+                            </button>
+                            <button type="button" onclick="selectDeploymentPreset('safety_first')" id="presetBtn-safety_first" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition">
+                                Безпека та точність
+                            </button>
+                            <button type="button" onclick="selectDeploymentPreset('high_speed')" id="presetBtn-high_speed" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition">
+                                Максимальна швидкість
+                            </button>
+                            <button type="button" onclick="selectDeploymentPreset('cost_effective')" id="presetBtn-cost_effective" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition">
+                                Мінімальна вартість
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="decisionSupportBody" class="space-y-4 text-xs"></div>
+                </div>
+
+                <!-- КАЛЬКУЛЯТОР ЕКОНОМІЧНОГО ТА ОПЕРАЦІЙНОГО ЕФЕКТУ АВТОМАТИЗАЦІЇ (ROI) -->
+                <div id="roiCalculatorCard" class="card-box p-5 space-y-4 border border-emerald-200">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-sm sm:text-base">
+                                Розрахунок операційного та економічного ефекту автоматизації
+                            </h3>
+                            <p class="text-xs text-slate-500">
+                                Оцінка економії робочого часу операторів та бюджету підприємства на основі фактичних метрик експерименту
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Модель для впровадження:</label>
+                            <select id="roiModelSelect" onchange="recalculateRoiWidget()" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-semibold text-slate-800"></select>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Потік звернень на місяць:</label>
+                            <input id="roiMonthlyVolumeInput" type="number" min="100" max="5000000" step="1000" value="10000" oninput="recalculateRoiWidget()" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-mono font-bold">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Час оператора на 1 запит (хв):</label>
+                            <input id="roiOperatorMinutesInput" type="number" min="1" max="60" step="0.5" value="6" oninput="recalculateRoiWidget()" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-mono font-bold">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Ставка оператора ($ / год):</label>
+                            <input id="roiOperatorHourlyUsdInput" type="number" min="1" max="150" step="0.5" value="8" oninput="recalculateRoiWidget()" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-mono font-bold">
+                        </div>
+                    </div>
+
+                    <div id="roiCalculatorResultsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs"></div>
+                </div>
+
+                <div id="multiRunsComparisonCard" class="hidden card-box overflow-hidden border border-indigo-200">
+                    <div class="px-4 py-2.5 bg-indigo-50 border-b border-indigo-200 font-bold text-xs sm:text-sm text-indigo-950">
+                        Порівняння показників у розрізі обраних серій
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
+                                    <th class="py-2 px-3">Серія експерименту</th>
+                                    <th class="py-2 px-2 text-center">Статус</th>
+                                    <th class="py-2 px-2 text-center">Замірів (n)</th>
+                                    <th class="py-2 px-2 text-center">Q<sub>det</sub>, %</th>
+                                    <th class="py-2 px-2 text-center">Повнота FC, %</th>
+                                    <th class="py-2 px-2 text-center">Схожість SS, %</th>
+                                    <th class="py-2 px-2 text-center">Рубрика, %</th>
+                                    <th class="py-2 px-2 text-center">Автоматиз. AR, %</th>
+                                    <th class="py-2 px-2 text-center">Час, мс</th>
+                                    <th class="py-2 px-2 text-center">Вартість ($/1M)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableMultiRunsBody" class="divide-y divide-slate-200"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-sm mb-2">Порівняння моделей за основними метриками (Q<sub>det</sub>, FC, SS, AR, %)</h3>
+                        <div class="h-64"><canvas id="chartModelsBar"></canvas></div>
+                    </div>
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-sm mb-2">Профіль якості за критеріями рубрики (шкала 1-5)</h3>
+                        <div class="h-64"><canvas id="chartNistRadar"></canvas></div>
+                    </div>
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-sm mb-2">Показники якості залежно від стратегії промпту (P1-P5)</h3>
+                        <div class="h-64"><canvas id="chartPromptsLine"></canvas></div>
+                    </div>
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-sm mb-2">Співвідношення якості (Q<sub>det</sub>, %) та затримки відповіді (мс)</h3>
+                        <div class="h-64"><canvas id="chartLatencyVsQuality"></canvas></div>
+                    </div>
+                </div>
+
+                <div class="card-box overflow-hidden">
+                    <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-bold text-sm">Зведена таблиця ефективності моделей</span>
+                        <span class="text-[11px] text-slate-500">Наведено середні значення, 95% довірчі інтервали та медіани</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
+                                    <th class="py-2.5 px-3">Модель</th>
+                                    <th class="py-2.5 px-2 text-center">n</th>
+                                    <th class="py-2.5 px-2 text-center">Q<sub>det</sub>, % (95% ДІ)</th>
+                                    <th class="py-2.5 px-2 text-center">Повнота FC, % (95% ДІ)</th>
+                                    <th class="py-2.5 px-2 text-center">Схожість SS, %</th>
+                                    <th class="py-2.5 px-2 text-center">Формат FMT, %</th>
+                                    <th class="py-2.5 px-2 text-center">Галюц., %</th>
+                                    <th class="py-2.5 px-2 text-center">Рубрика (1-5)</th>
+                                    <th class="py-2.5 px-2 text-center">Час: Сер / Мед (P95), мс</th>
+                                    <th class="py-2.5 px-2 text-center">Автоматиз., %</th>
+                                    <th class="py-2.5 px-2 text-center">Вартість ($/1M)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableModelsBody" class="divide-y divide-slate-200"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card-box overflow-hidden">
+                    <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 font-bold text-sm">
+                        Порівняння стратегій конструювання промптів (P1-P5)
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
+                                    <th class="py-2.5 px-3">Стратегія промпту</th>
+                                    <th class="py-2.5 px-2 text-center">n</th>
+                                    <th class="py-2.5 px-2 text-center">Q<sub>det</sub>, % (95% ДІ)</th>
+                                    <th class="py-2.5 px-2 text-center">Повнота FC, % (95% ДІ)</th>
+                                    <th class="py-2.5 px-2 text-center">Формат FMT, %</th>
+                                    <th class="py-2.5 px-2 text-center">Галюц., %</th>
+                                    <th class="py-2.5 px-2 text-center">Шлюз F1 (FN-rate)</th>
+                                    <th class="py-2.5 px-2 text-center">Час: Сер / Мед, мс</th>
+                                    <th class="py-2.5 px-2 text-center">Токени (Вх/Вих)</th>
+                                    <th class="py-2.5 px-2 text-center">Вартість ($/1M)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tablePromptsBody" class="divide-y divide-slate-200"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-xs sm:text-sm mb-2">Матриця Модель × Промпт (Q<sub>det</sub>, % та обсяг вибірки n)</h3>
+                        <div id="matrixModelPromptContainer" class="overflow-x-auto"></div>
+                    </div>
+                    <div class="card-box p-4">
+                        <h3 class="font-bold text-slate-800 text-xs sm:text-sm mb-2">Матриця Модель × Категорія (Q<sub>det</sub>, % та обсяг вибірки n)</h3>
+                        <div id="matrixModelCategoryContainer" class="overflow-x-auto"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                    <div class="card-box p-4 space-y-3">
+                        <h3 class="font-bold text-slate-900 text-sm border-b border-slate-200 pb-2">
+                            Статистичні критерії значущості (Вілкоксон, Фрідман з поправкою Холма, Cliff's delta)
+                        </h3>
+                        <div id="statsTestsContainer" class="text-xs space-y-2.5"></div>
+                    </div>
+                    <div class="card-box p-4 space-y-3">
+                        <h3 class="font-bold text-slate-900 text-sm border-b border-slate-200 pb-2">
+                            Точність шлюзу ескалації (TP / FP / FN / TN) та чутливість ваг
+                        </h3>
+                        <div id="escalationAndSensitivityContainer" class="text-xs space-y-3"></div>
+                    </div>
+                </div>
+
+                <div class="card-box p-5 space-y-4 bg-slate-50/70 border border-slate-300">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">
+                                Довідник метрик та методики розрахунку
+                            </h3>
+                            <p class="text-xs text-slate-600">
+                                Опис формул, критеріїв рубрики та статистичних тестів, що використовуються під час оцінювання
+                            </p>
+                        </div>
+                    </div>
+
+                    <div id="methodologyDynamicContainer" class="text-xs space-y-3">
+                        <div class="text-slate-500">Завантаження опису метрик...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА: БАЗА І ПРОМПТИ -->
+        <section id="tab-dataset" class="hidden space-y-5">
+            <div class="card-box p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                    <div>
+                        <h2 class="font-bold text-slate-900 text-base">
+                            Шаблони промптів (P1-P5)
+                        </h2>
+                        <p class="text-xs text-slate-500">
+                            Системні інструкції та користувацькі шаблони для кожної досліджуваної стратегії
+                        </p>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="promptCardsGrid"></div>
+            </div>
+
+            <div class="card-box p-5 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h2 class="font-bold text-slate-900 text-base">База типових запитів користувачів (Мульти-доменний довідник)</h2>
+                        <p class="text-xs text-slate-500">Еталонні запити, контекстні факти з бази знань та очікувана маршрутизація за 4 сферами</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="datasetDomainFilter" onchange="renderDatasetTable()" class="border border-blue-300 rounded-lg px-3 py-1.5 text-xs bg-blue-50/40 font-semibold text-slate-800">
+                            <option value="all">Усі сфери (108)</option>
+                            <option value="fintech">Фінтех / Банкінг (60)</option>
+                            <option value="it_helpdesk">ІТ / SaaS Helpdesk (16)</option>
+                            <option value="ecommerce">E-Commerce / Доставка (16)</option>
+                            <option value="telecom">Телеком / Зв'язок (16)</option>
+                        </select>
+                        <select id="datasetCategoryFilter" onchange="renderDatasetTable()" class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
+                            <option value="all">Усі категорії</option>
+                            <option value="informational">Інформаційні</option>
+                            <option value="procedural">Процедурні</option>
+                            <option value="troubleshooting">Проблемні</option>
+                            <option value="clarification">Уточнювальні</option>
+                        </select>
+                        <button type="button" onclick="openImportQueriesModal()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition">
+                            + Додати / Імпорт JSON
+                        </button>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto max-h-[480px]">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead class="bg-slate-100 text-slate-700 sticky top-0">
+                            <tr>
+                                <th class="py-2 px-2.5">Код</th>
+                                <th class="py-2 px-2.5">Сфера</th>
+                                <th class="py-2 px-2.5">Категорія</th>
+                                <th class="py-2 px-2.5">Запит користувача</th>
+                                <th class="py-2 px-2.5">Еталонна відповідь</th>
+                                <th class="py-2 px-2.5">Ключові факти</th>
+                            </tr>
+                        </thead>
+                        <tbody id="datasetTableBody" class="divide-y divide-slate-200"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА: ПРОВАЙДЕРИ І МОДЕЛІ -->
+        <section id="tab-settings" class="hidden space-y-5">
+
+            <div class="card-box overflow-hidden border border-slate-300">
+                <div class="p-4 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
+                    <div class="space-y-1">
+                        <div class="flex items-center gap-2">
+                            <span class="text-base font-bold text-white">API-ключі та параметри середовища</span>
+                            <span id="envFileBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                                <span id="envFilePathLabel">.env</span>
+                            </span>
+                        </div>
+                        <div id="keysQuickStatusPills" class="flex flex-wrap items-center gap-1.5 text-[11px]"></div>
+                    </div>
+                    <button onclick="toggleKeysConfigDrawer()" id="toggleKeysDrawerBtn" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center gap-1.5 transition">
+                        <span>Налаштувати ключі</span>
+                        <span id="keysDrawerArrow">▾</span>
+                    </button>
+                </div>
+
+                <form id="keysConfigDrawer" autocomplete="new-password" onsubmit="event.preventDefault(); saveSystemSettings();" class="hidden p-5 bg-slate-50 border-t border-slate-200 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                        <div id="cardGeminiKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>Google AI Studio</span>
+                                <span id="statusGeminiKey" class="text-[10px]"></span>
+                            </div>
+                            <input id="settingsGeminiKey" type="password" autocomplete="new-password" placeholder="AIza..." class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">GEMINI_API_KEY</div>
+                        </div>
+
+                        <div id="cardGroqKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>Groq Cloud</span>
+                                <span id="statusGroqKey" class="text-[10px]"></span>
+                            </div>
+                            <input id="settingsGroqKey" type="password" autocomplete="new-password" placeholder="gsk_..." class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">GROQ_API_KEY</div>
+                        </div>
+
+                        <div id="cardOpenrouterKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>OpenRouter</span>
+                                <span id="statusOpenrouterKey" class="text-[10px]"></span>
+                            </div>
+                            <input id="settingsOpenrouterKey" type="password" autocomplete="new-password" placeholder="sk-or-v1-..." class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">OPENROUTER_API_KEY</div>
+                        </div>
+
+                        <div id="cardOpenaiKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>OpenAI Platform</span>
+                                <span id="statusOpenaiKey" class="text-[10px]"></span>
+                            </div>
+                            <input id="settingsOpenaiKey" type="password" autocomplete="new-password" placeholder="sk-proj-..." class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">OPENAI_API_KEY</div>
+                        </div>
+
+                        <div id="cardAnthropicKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>Anthropic Claude</span>
+                                <span id="statusAnthropicKey" class="text-[10px]"></span>
+                            </div>
+                            <input id="settingsAnthropicKey" type="password" autocomplete="new-password" placeholder="sk-ant-..." class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">ANTHROPIC_API_KEY</div>
+                        </div>
+
+                        <div id="cardOllamaKey" class="p-3 rounded-lg bg-white border border-slate-200 space-y-1 transition">
+                            <div class="flex justify-between items-center font-bold text-slate-800">
+                                <span>Ollama Local</span>
+                                <span class="text-[10px] text-slate-500 font-mono">http://localhost:11434</span>
+                            </div>
+                            <input id="settingsOllamaUrl" type="text" value="http://localhost:11434" class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                            <div class="text-[10px] text-slate-500 font-mono">OLLAMA_BASE_URL</div>
+                        </div>
+                    </div>
+
+                    <details class="text-xs text-slate-700 bg-white p-3 rounded-lg border border-slate-200">
+                        <summary class="font-semibold text-slate-800 cursor-pointer select-none">
+                            Параметри генерації та перевірки за замовчуванням
+                        </summary>
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-3 pt-3 border-t border-slate-200">
+                            <div>
+                                <label class="block font-semibold mb-1">TEMPERATURE (0.0 - 1.0):</label>
+                                <input id="settingsTemperature" type="number" step="0.1" min="0" max="1" value="0.0" class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                                <span class="text-[10px] text-slate-400">0.0 забезпечує відтворюваність відповідей</span>
+                            </div>
+                            <div>
+                                <label class="block font-semibold mb-1">CONFIDENCE_THRESHOLD (0.5 - 0.95):</label>
+                                <input id="settingsConfThreshold" type="number" step="0.05" min="0.5" max="0.95" value="0.75" class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                                <span class="text-[10px] text-slate-400">Поріг впевненості класифікатора</span>
+                            </div>
+                            <div>
+                                <label class="block font-semibold mb-1">OLLAMA_MODEL_NAME:</label>
+                                <input id="settingsOllamaModel" type="text" value="llama3.2" class="w-full border border-slate-300 rounded px-2.5 py-1.5 text-xs">
+                                <span class="text-[10px] text-slate-400">Базова локальна модель у Ollama</span>
+                            </div>
+                            <div class="flex flex-col justify-center">
+                                <label class="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                                    <input id="settingsProbeOnStartup" type="checkbox" checked class="rounded border-slate-300 text-blue-600">
+                                    <span>Автоматично перевіряти статуси при старті</span>
+                                </label>
+                                <span class="text-[10px] text-slate-400 mt-1">Перевіряє лише увімкнені моделі</span>
+                            </div>
+                        </div>
+                    </details>
+
+                    <div class="flex items-center justify-between gap-3 pt-1">
+                        <button type="submit" class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm transition">
+                            Зберегти налаштування у .env
+                        </button>
+                        <div id="settingsSavedNotice" class="hidden text-xs font-semibold text-emerald-800 bg-emerald-100 px-3 py-1.5 rounded-lg">
+                            Налаштування збережено
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <div class="card-box p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3.5">
+                    <div>
+                        <h2 class="font-bold text-slate-900 text-base flex items-center gap-2">
+                            <span>Провайдери та каталог моделей</span>
+                            <span id="activeModelsCountBadge" class="text-xs px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-semibold"></span>
+                        </h2>
+                        <p class="text-xs text-slate-500 mt-0.5">
+                            Натисніть на картку провайдера для вибору моделей, перегляду статусів, цін та лімітів.
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <button onclick="openCustomModelModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-semibold transition">
+                            Додати модель
+                        </button>
+                        <button onclick="probeApiLimits({ silent: false })" id="probeApiLimitsBtn" class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 shadow-sm transition">
+                            Оновити статуси
+                        </button>
+                        <button onclick="quickSelectSettingsModels('working')" class="px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 font-semibold transition">
+                            Увімкнути робочі з каталогу
+                        </button>
+                    </div>
+                </div>
+
+                <div id="probeFeedbackBanner" class="hidden p-3 rounded-xl text-xs font-medium flex items-center justify-between transition"></div>
+
+                <div id="providersTilesGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-stretch"></div>
+
+                <div id="activeModelsSummaryContainer" class="pt-3 border-t border-slate-200 space-y-2">
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="font-bold text-slate-800">
+                            Активні моделі для запусків та експериментів
+                        </span>
+                        <span id="activeModelsSummaryCount" class="text-slate-500 font-medium"></span>
+                    </div>
+                    <div id="activeModelsChipsList" class="flex flex-wrap gap-2 text-xs"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Модальне вікно списку моделей обраного провайдера -->
+        <div id="providerModelsModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[88vh] flex flex-col overflow-hidden border border-slate-300">
+                <div class="px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2 border-b border-slate-800">
+                    <div class="flex items-center gap-2.5">
+                        <span id="provModalIcon" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-200 flex items-center justify-center font-bold text-xs font-mono">API</span>
+                        <div>
+                            <h3 id="provModalTitle" class="font-bold text-sm text-white">Провайдер</h3>
+                            <div id="provModalSubtitle" class="text-[11px] text-slate-400 font-mono"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <div id="provModalRouteControl"></div>
+                        <button onclick="closeProviderModelsModal()" class="w-8 h-8 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-lg transition">
+                            &times;
+                        </button>
+                    </div>
+                </div>
+
+                <div class="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div class="flex items-center gap-2 flex-1 min-w-[200px]">
+                        <input id="provModalSearchInput" type="text" oninput="filterProviderModalModels()" placeholder="Пошук моделі за назвою або ID..." class="w-full max-w-xs border border-slate-300 rounded-lg px-2.5 py-1 text-xs bg-white">
+                        <span id="provModalCountBadge" class="text-slate-600 font-medium whitespace-nowrap"></span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="toggleAllModelsForCurrentProvider(true)" class="px-2.5 py-1 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium transition">
+                            Увімкнути всі
+                        </button>
+                        <button onclick="toggleAllModelsForCurrentProvider(false)" class="px-2.5 py-1 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium transition">
+                            Вимкнути всі
+                        </button>
+                    </div>
+                </div>
+
+                <div id="provModalModelsList" class="p-5 overflow-y-auto space-y-3 flex-1 text-xs"></div>
+
+                <div class="px-5 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-end">
+                    <button onclick="closeProviderModelsModal()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm transition">
+                        Готово
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модальне вікно додавання власної моделі -->
+        <div id="customModelModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-300">
+                <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                    <h3 class="font-bold text-sm">Додати модель (OpenAI-сумісний API або провайдер)</h3>
+                    <button onclick="closeCustomModelModal()" class="text-slate-300 hover:text-white text-xl font-bold">&times;</button>
+                </div>
+                <form autocomplete="new-password" onsubmit="event.preventDefault(); submitCustomModel();" class="p-5 space-y-3 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Провайдер:</label>
+                            <select id="customModelProvider" onchange="onCustomModelProviderChange()" class="w-full border border-slate-300 rounded px-2.5 py-1.5 bg-white">
+                                <option value="custom">OpenAI-сумісний сервер</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="groq">Groq</option>
+                                <option value="gemini">Google Gemini</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="openrouter">OpenRouter</option>
+                                <option value="ollama">Ollama</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Base URL:</label>
+                            <input id="customModelBaseUrl" type="text" value="https://api.openai.com/v1" placeholder="http://localhost:8080/v1" class="w-full border border-slate-300 rounded px-2.5 py-1.5">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">ID моделі в API:</label>
+                            <input id="customModelId" type="text" required placeholder="deepseek-chat або mistral-small" class="w-full border border-slate-300 rounded px-2.5 py-1.5">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Назва для відображення:</label>
+                            <input id="customModelDisplayName" type="text" placeholder="DeepSeek V3" class="w-full border border-slate-300 rounded px-2.5 py-1.5">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Ім'я змінної ключа у .env:</label>
+                            <input id="customModelKeyEnv" type="text" placeholder="CUSTOM_API_KEY" class="w-full border border-slate-300 rounded px-2.5 py-1.5 font-mono">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">API-ключ (опціонально):</label>
+                            <input id="customModelApiKey" type="password" autocomplete="new-password" placeholder="sk-..." class="w-full border border-slate-300 rounded px-2.5 py-1.5">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Вхід ($/1M ток.):</label>
+                            <input id="customModelPriceIn" type="number" step="0.01" min="0" placeholder="Не задано" class="w-full border border-slate-300 rounded px-2 py-1.5">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Вихід ($/1M ток.):</label>
+                            <input id="customModelPriceOut" type="number" step="0.01" min="0" placeholder="Не задано" class="w-full border border-slate-300 rounded px-2 py-1.5">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-700 mb-1">Контекст (ток.):</label>
+                            <input id="customModelContext" type="number" step="1024" min="512" placeholder="128000" class="w-full border border-slate-300 rounded px-2 py-1.5">
+                        </div>
+                    </div>
+                    <div id="customModelTestFeedback" class="hidden p-2.5 rounded border text-xs"></div>
+                    <div class="pt-2 flex items-center justify-between gap-2 border-t border-slate-200">
+                        <button type="button" onclick="testCustomModelFromModal()" id="customModelTestBtn" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold transition">
+                            Перевірити з'єднання
+                        </button>
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="closeCustomModelModal()" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold">
+                                Скасувати
+                            </button>
+                            <button type="submit" id="customModelSaveBtn" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold">
+                                Зберегти модель
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ВКЛАДКА: ЖУРНАЛ ПОДІЙ -->
+        <section id="tab-logs" class="hidden space-y-4">
+            <div class="card-box overflow-hidden border border-slate-400">
+                <div class="px-4 py-3 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+                        <span class="font-bold text-slate-100">Системний журнал</span>
+                        <span class="text-slate-400">(<code>data/system.log</code>)</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="copyAllLogs()" class="px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium">
+                            Скопіювати
+                        </button>
+                        <button onclick="clearServerLogs()" class="px-2.5 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white font-medium">
+                            Очистити
+                        </button>
+                    </div>
+                </div>
+                <div id="liveLogTerminal" class="log-terminal p-4 h-[520px] overflow-y-auto space-y-1.5 text-xs font-mono">
+                    <div class="text-slate-400">Завантаження журналу...</div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Підтвердження видалення експерименту -->
+    <div id="deleteConfirmModal" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl max-w-md w-full shadow-2xl overflow-hidden border border-slate-200">
+            <div class="px-5 py-3.5 bg-rose-600 text-white flex items-center justify-between">
+                <h3 class="font-bold text-sm">Підтвердження видалення серії</h3>
+                <button onclick="closeDeleteConfirmModal()" class="text-rose-100 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <div class="p-5 space-y-3 text-xs sm:text-sm text-slate-700">
+                <p>Ви дійсно бажаєте видалити серію експериментів:</p>
+                <div id="deleteConfirmRunInfo" class="p-3 rounded-lg bg-rose-50 border border-rose-200 font-semibold text-rose-950"></div>
+                <p class="text-xs text-slate-500">
+                    Усі заміри цієї серії будуть видалені з бази даних.
+                </p>
+                <div class="pt-2 flex justify-end gap-2.5">
+                    <button onclick="closeDeleteConfirmModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700">
+                        Скасувати
+                    </button>
+                    <button onclick="confirmDeleteExperimentRun()" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold shadow-sm">
+                        Видалити
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Детальний паспорт окремого заміру -->
+    <div id="itemDetailModal" class="fixed inset-0 bg-slate-900/65 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl max-w-5xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-300">
+            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                <div>
+                    <span class="text-[11px] uppercase tracking-wider text-blue-400 font-semibold">Деталі виконаного заміру</span>
+                    <h3 id="detailModalTitle" class="font-bold text-sm sm:text-base">-</h3>
+                </div>
+                <button onclick="closeItemDetailModal()" class="text-slate-300 hover:text-white text-2xl font-bold leading-none">&times;</button>
+            </div>
+            <div id="itemDetailModalBody" class="p-5 space-y-4 flex-1 overflow-y-auto text-xs sm:text-sm"></div>
+        </div>
+    </div>
+
+    <!-- Редагування шаблону промпту -->
+    <div id="promptEditModal" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                <h3 id="promptEditModalTitle" class="font-bold text-sm">Редагування шаблону промпту</h3>
+                <button onclick="closePromptEditModal()" class="text-slate-300 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <div class="p-5 space-y-3 flex-1 overflow-y-auto text-xs sm:text-sm">
+                <input type="hidden" id="editPromptCode">
+                <input type="hidden" id="editPromptStrategyType">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Назва стратегії:</label>
+                    <input id="editPromptNameUk" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Опис:</label>
+                    <input id="editPromptDescUk" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Системна інструкція (SYSTEM TEMPLATE):</label>
+                    <textarea id="editPromptSystemTemplate" rows="4" class="w-full border border-slate-300 rounded-lg p-3 font-mono text-xs"></textarea>
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">
+                        Користувацький шаблон (змінні: <code>{user_query}</code>, <code>{context_fact}</code>, <code>{category_name_uk}</code>, <code>{few_shot_examples}</code>):
+                    </label>
+                    <textarea id="editPromptUserTemplate" rows="8" class="w-full border border-slate-300 rounded-lg p-3 font-mono text-xs"></textarea>
+                </div>
+                <div class="pt-2 flex justify-end gap-2">
+                    <button onclick="closePromptEditModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700">
+                        Скасувати
+                    </button>
+                    <button onclick="savePromptTemplateChanges()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm">
+                        Зберегти шаблон
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Експорт таблиць -->
+    <div id="exportModal" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                <h3 class="font-bold text-sm">Експорт зведених таблиць та звітів</h3>
+                <button onclick="closeExportModal()" class="text-slate-300 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <div class="p-4 space-y-3 flex-1 overflow-y-auto">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex gap-2">
+                        <button onclick="switchExportFormat('markdown')" id="expFmtBtn-markdown" class="px-3 py-1.5 rounded bg-blue-600 text-white font-semibold text-xs">Markdown</button>
+                        <button onclick="switchExportFormat('csv')" id="expFmtBtn-csv" class="px-3 py-1.5 rounded bg-slate-200 text-slate-700 font-semibold text-xs">CSV (Excel)</button>
+                        <button onclick="switchExportFormat('latex')" id="expFmtBtn-latex" class="px-3 py-1.5 rounded bg-slate-200 text-slate-700 font-semibold text-xs">LaTeX</button>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="downloadExportFile('csv')" class="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">Завантажити .CSV (Excel)</button>
+                        <button onclick="downloadExportFile('md')" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold">Завантажити .MD</button>
+                        <button onclick="downloadExportFile('tex')" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold">Завантажити .TEX</button>
+                        <button onclick="copyExportText()" class="px-3 py-1.5 rounded border border-blue-600 text-blue-600 hover:bg-blue-50 text-xs font-semibold">Скопіювати текст</button>
+                    </div>
+                </div>
+                <textarea id="exportModalTextarea" rows="15" readonly class="w-full font-mono text-xs p-3 bg-slate-900 text-slate-100 rounded-lg"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальне вікно дооцінювання серії LLM-суддею -->
+    <div id="judgeRunModal" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-200">
+            <div class="px-5 py-3.5 bg-indigo-700 text-white flex items-center justify-between">
+                <h3 id="judgeRunModalTitle" class="font-bold text-sm">Дооцінити серію за допомогою LLM-судді</h3>
+                <button onclick="closeJudgeRunModal()" class="text-indigo-200 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <div class="p-5 space-y-4 text-xs sm:text-sm text-slate-700">
+                <input type="hidden" id="judgeRunTargetId">
+                <p id="judgeRunModalInfo" class="text-xs text-slate-600 leading-relaxed"></p>
+                <div>
+                    <label class="block font-semibold text-slate-800 mb-1 text-xs">Оберіть активну модель для ролі судді:</label>
+                    <select id="judgeRunModelSelect" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white text-xs"></select>
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                    <input type="checkbox" id="judgeRunOnlyUnjudged" checked class="rounded text-indigo-600">
+                    <span>Оцінювати лише заміри, які ще не мають оцінки судді (пропустити вже оцінені)</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                    <input type="checkbox" id="judgeRunAllowSelfJudge" class="rounded text-indigo-600">
+                    <span>Дозволити самооцінювання (заміри тієї ж родини позначатимуться як self_judged=1)</span>
+                </label>
+                <div class="pt-2 flex justify-end gap-2.5">
+                    <button onclick="closeJudgeRunModal()" class="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-semibold text-slate-700 text-xs">
+                        Скасувати
+                    </button>
+                    <button onclick="confirmJudgeRunEvaluation()" id="confirmJudgeRunBtn" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm text-xs">
+                        Запустити оцінювання суддею
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Діалог вибору дії під час експерименту -->
+    <div id="interactiveDecisionModal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-amber-300">
+            <div class="px-5 py-4 bg-amber-600 text-white flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <h3 id="interactiveModalTitle" class="font-bold text-sm text-white">Потрібне рішення для продовження</h3>
+                </div>
+                <span id="interactiveModalTimer" class="text-xs font-mono bg-amber-700 px-2 py-0.5 rounded text-amber-100"></span>
+            </div>
+            <div class="p-5 space-y-4 text-xs">
+                <div id="interactiveModalMessage" class="text-slate-800 leading-relaxed text-sm"></div>
+                <div id="interactiveModalDetails" class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 font-mono text-[11px] break-words"></div>
+                <div class="pt-2">
+                    <div class="text-[11px] font-semibold text-slate-500 mb-2 uppercase tracking-wider">Оберіть дію:</div>
+                    <div id="interactiveModalButtons" class="flex flex-col gap-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="importQueriesModal" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl max-w-2xl w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div>
+                    <h3 class="font-bold text-slate-900 text-base">Додавання або JSON-імпорт типових запитів</h3>
+                    <p class="text-xs text-slate-500">Завантажте власний набір типових запитів служби підтримки у форматі JSON</p>
+                </div>
+                <button onclick="closeImportQueriesModal()" class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold">Закрити</button>
+            </div>
+            <div class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Предметна сфера за замовчуванням:</label>
+                    <select id="importQueriesDomainSelect" class="w-full border border-slate-300 rounded-lg px-3 py-1.5 bg-white font-semibold">
+                        <option value="fintech">Фінтех та Інтернет-банкінг (fintech)</option>
+                        <option value="it_helpdesk">ІТ-підтримка та SaaS (it_helpdesk)</option>
+                        <option value="ecommerce">Електронна комерція (ecommerce)</option>
+                        <option value="telecom">Телекомунікації (telecom)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Масив запитів у форматі JSON:</label>
+                    <textarea id="importQueriesJsonTextarea" rows="8" class="w-full p-3 font-mono text-[11px] bg-slate-900 text-emerald-300 rounded-lg border border-slate-700"></textarea>
+                </div>
+                <div id="importQueriesStatusMsg" class="hidden p-2.5 rounded-lg font-semibold"></div>
+            </div>
+            <div class="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                <button onclick="closeImportQueriesModal()" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs">Скасувати</button>
+                <button onclick="submitImportQueriesJson()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm">Імпортувати в базу</button>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/core.js?v=5.1"></script>
+    <script src="/static/js/providers.js?v=5.1"></script>
+    <script src="/static/js/sandbox.js?v=5.1"></script>
+    <script src="/static/js/assistant.js?v=5.1"></script>
+    <script src="/static/js/experiments.js?v=5.1"></script>
+    <script src="/static/js/analytics.js?v=5.1"></script>
+    <script src="/static/js/dataset.js?v=5.1"></script>
+    <script src="/static/js/settings.js?v=5.1"></script>
+</body>
+</html>

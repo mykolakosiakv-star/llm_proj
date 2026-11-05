@@ -1,0 +1,62 @@
+body {
+    background-color: #f8fafc;
+    color: #0f172a;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.nav-pill {
+    border: 1px solid transparent;
+}
+
+.nav-pill:hover {
+    background-color: #e2e8f0;
+    color: #0f172a;
+}
+
+.nav-pill.active {
+    background-color: #ffffff;
+    color: #1d4ed8;
+    border-color: #cbd5e1;
+    font-weight: 600;
+}
+
+.card-box {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+}
+
+.stage-pill {
+    border: 1px solid #cbd5e1;
+    background-color: #f8fafc;
+    color: #64748b;
+}
+
+.stage-pill.stage-active {
+    border-color: #2563eb;
+    background-color: #eff6ff;
+    color: #1d4ed8;
+    font-weight: 600;
+}
+
+.stage-pill.stage-done {
+    border-color: #10b981;
+    background-color: #ecfdf5;
+    color: #065f46;
+    font-weight: 600;
+}
+
+/* Термінал логів */
+.log-terminal {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    font-family: 'Consolas', 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Теплова матриця */
+.heat-high { background-color: #dcfce7; color: #166534; font-weight: 700; }
+.heat-good { background-color: #e0f2fe; color: #075985; font-weight: 600; }
+.heat-mid  { background-color: #fef3c7; color: #92400e; font-weight: 600; }
+.heat-low  { background-color: #fee2e2; color: #991b1b; font-weight: 600; }
