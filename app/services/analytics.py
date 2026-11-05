@@ -21,6 +21,7 @@ from app.config import (
 )
 from app.database import (
     get_connection,
+    fetch_all_domains,
     fetch_all_queries,
     fetch_query_by_id,
     fetch_all_prompts,
@@ -29,6 +30,7 @@ from app.database import (
 )
 from app.services.prompt_builder import build_prompt_messages
 from app.services.llm_runtime import calculate_cost_usd
+from app.services.hypotheses import assess_hypotheses
 from app.services.stats import (
     describe_sample,
     aggregate_repeats_by_query,
@@ -139,6 +141,7 @@ def _filter_balanced_intersection(
 def _enrich_rows_with_ground_truth(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     queries_by_code = {q["code"]: q for q in fetch_all_queries()}
     for r in rows:
+        r["domain"] = (queries_by_code.get(r.get("query_code", "")) or {}).get("domain") or "fintech"
         if "expected_escalation" not in r or r["expected_escalation"] is None:
             q_obj = queries_by_code.get(r.get("query_code", ""))
             if q_obj is not None:
@@ -621,6 +624,38 @@ def _generate_scientific_findings(
     return findings
 
 
+def _matrix_cell(sub: List[Dict[str, Any]]) -> Dict[str, Any]:
+    desc_fc = describe_sample([float(x["fact_coverage_pct"]) for x in sub], n_boot=2000)
+    desc_eff = describe_sample([float(x["integral_efficiency_pct"]) for x in sub], n_boot=2000)
+    return {
+        "n": len(sub),
+        "insufficient_n": len(sub) < WILCOXON_MIN_PAIRS,
+        "insufficient_sample": len(sub) < WILCOXON_MIN_PAIRS,
+        "integral_efficiency_pct": round(desc_eff["mean"], 1),
+        "efficiency_ci95": [desc_eff["ci95_low"], desc_eff["ci95_high"]],
+        "fact_coverage_pct": round(desc_fc["mean"], 1),
+        "fact_coverage_ci95": [desc_fc["ci95_low"], desc_fc["ci95_high"]],
+        "format_compliance_pct": round(_mean([float(x["format_compliance_pct"]) for x in sub]), 1),
+        "relevance_score": round(_mean([float(x["relevance_score"]) for x in sub]), 2),
+        "automation_rate_pct": round(_mean([100.0 if x["automation_success"] else 0.0 for x in sub]), 1),
+        "latency_mean_ms": round(_mean([float(x["latency_ms"]) for x in sub]), 1),
+    }
+
+
+def _build_matrix(
+    unit_rows: List[Dict[str, Any]], row_ids: List[str], col_ids: List[str], row_key: str, col_key: str
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Матриця «рядок x стовпець» із середніми метриками, довірчими інтервалами та розміром вибірки в клітинці."""
+    matrix: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row_id in row_ids:
+        matrix[row_id] = {}
+        for col_id in col_ids:
+            sub = [r for r in unit_rows if r[row_key] == row_id and r[col_key] == col_id]
+            if sub:
+                matrix[row_id][col_id] = _matrix_cell(sub)
+    return matrix
+
+
 def _build_analytics_payload(
     rows: List[Dict[str, Any]],
     prompts_map: Dict[str, Any],
@@ -693,62 +728,21 @@ def _build_analytics_payload(
     context_mode_comparison = _compute_context_mode_comparison(by_context_mode)
 
     unit_rows = aggregate_repeats_by_query(rows)
-    matrix_model_prompt: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for m_id in models_present:
-        matrix_model_prompt[m_id] = {}
-        for p_code in prompts_present:
-            sub = [r for r in unit_rows if r["model_id"] == m_id and r["prompt_code"] == p_code]
-            if sub:
-                desc_fc = describe_sample([float(x["fact_coverage_pct"]) for x in sub], n_boot=2000)
-                desc_eff = describe_sample([float(x["integral_efficiency_pct"]) for x in sub], n_boot=2000)
-                matrix_model_prompt[m_id][p_code] = {
-                    "n": len(sub),
-                    "insufficient_n": len(sub) < WILCOXON_MIN_PAIRS,
-                    "insufficient_sample": len(sub) < WILCOXON_MIN_PAIRS,
-                    "integral_efficiency_pct": round(desc_eff["mean"], 1),
-                    "efficiency_ci95": [desc_eff["ci95_low"], desc_eff["ci95_high"]],
-                    "fact_coverage_pct": round(desc_fc["mean"], 1),
-                    "fact_coverage_ci95": [desc_fc["ci95_low"], desc_fc["ci95_high"]],
-                    "automation_rate_pct": round(_mean([100.0 if x["automation_success"] else 0.0 for x in sub]), 1),
-                    "latency_mean_ms": round(_mean([float(x["latency_ms"]) for x in sub]), 1),
-                }
+    domain_names = {d["code"]: d["domain_name"] for d in fetch_all_domains()}
+    domains_present = [d for d in domain_names if any(r.get("domain") == d for r in rows)]
+    by_domain: List[Dict[str, Any]] = []
+    for d_code in domains_present:
+        stats = _calc_group_metrics(
+            [r for r in rows if r.get("domain") == d_code], include_self_judged=include_self_judged, dominant_judge=dom_judge
+        )
+        stats["domain_code"] = d_code
+        stats["domain_name_uk"] = domain_names[d_code]
+        by_domain.append(stats)
 
-    matrix_model_category: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for m_id in models_present:
-        matrix_model_category[m_id] = {}
-        for c_code in cats_present:
-            sub = [r for r in unit_rows if r["model_id"] == m_id and r["category"] == c_code]
-            if sub:
-                desc_fc = describe_sample([float(x["fact_coverage_pct"]) for x in sub], n_boot=2000)
-                desc_eff = describe_sample([float(x["integral_efficiency_pct"]) for x in sub], n_boot=2000)
-                matrix_model_category[m_id][c_code] = {
-                    "n": len(sub),
-                    "insufficient_n": len(sub) < WILCOXON_MIN_PAIRS,
-                    "insufficient_sample": len(sub) < WILCOXON_MIN_PAIRS,
-                    "integral_efficiency_pct": round(desc_eff["mean"], 1),
-                    "efficiency_ci95": [desc_eff["ci95_low"], desc_eff["ci95_high"]],
-                    "fact_coverage_pct": round(desc_fc["mean"], 1),
-                    "fact_coverage_ci95": [desc_fc["ci95_low"], desc_fc["ci95_high"]],
-                    "relevance_score": round(_mean([float(x["relevance_score"]) for x in sub]), 2),
-                    "automation_rate_pct": round(_mean([100.0 if x["automation_success"] else 0.0 for x in sub]), 1),
-                }
-
-    matrix_prompt_category: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for p_code in prompts_present:
-        matrix_prompt_category[p_code] = {}
-        for c_code in cats_present:
-            sub = [r for r in unit_rows if r["prompt_code"] == p_code and r["category"] == c_code]
-            if sub:
-                desc_fc = describe_sample([float(x["fact_coverage_pct"]) for x in sub], n_boot=2000)
-                desc_eff = describe_sample([float(x["integral_efficiency_pct"]) for x in sub], n_boot=2000)
-                matrix_prompt_category[p_code][c_code] = {
-                    "n": len(sub),
-                    "insufficient_n": len(sub) < WILCOXON_MIN_PAIRS,
-                    "insufficient_sample": len(sub) < WILCOXON_MIN_PAIRS,
-                    "integral_efficiency_pct": round(desc_eff["mean"], 1),
-                    "fact_coverage_pct": round(desc_fc["mean"], 1),
-                    "format_compliance_pct": round(_mean([float(x["format_compliance_pct"]) for x in sub]), 1),
-                }
+    matrix_model_prompt = _build_matrix(unit_rows, models_present, prompts_present, "model_id", "prompt_code")
+    matrix_model_category = _build_matrix(unit_rows, models_present, cats_present, "model_id", "category")
+    matrix_model_domain = _build_matrix(unit_rows, models_present, domains_present, "model_id", "domain")
+    matrix_prompt_category = _build_matrix(unit_rows, prompts_present, cats_present, "prompt_code", "category")
 
     overall_stats = _calc_group_metrics(rows, include_self_judged=include_self_judged, dominant_judge=dom_judge)
 
@@ -799,6 +793,8 @@ def _build_analytics_payload(
         "matrix_model_prompt": matrix_model_prompt,
         "matrix_model_category": matrix_model_category,
         "matrix_prompt_category": matrix_prompt_category,
+        "matrix_model_domain": matrix_model_domain,
+        "by_domain": by_domain,
         "statistical_tests": stat_tests,
         "pareto_fronts": pareto_info,
         "weight_sensitivity": sensitivity_info,
@@ -808,6 +804,14 @@ def _build_analytics_payload(
         "repeat_stability": overall_stats.get("stability_info", {}),
         "scientific_findings": scientific_findings,
         "decision_support": decision_support,
+        "hypotheses": assess_hypotheses(
+            by_model=by_model,
+            by_prompt=by_prompt,
+            by_context_mode=by_context_mode,
+            matrix_model_domain=matrix_model_domain,
+            by_domain=by_domain,
+            n_queries=len({r["query_code"] for r in rows}),
+        ),
         "conclusion": build_conclusion(
             by_model=by_model,
             stat_tests=stat_tests,
@@ -879,6 +883,7 @@ def compute_flexible_analytics(
     categories: Optional[List[str]] = None,
     balanced_only: bool = True,
     include_self_judged: bool = False,
+    domains: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     if not run_ids:
         return {"runs": [], "overall": {"count": 0}}
@@ -931,6 +936,13 @@ def compute_flexible_analytics(
             "strategy_type": p_info.get("strategy_type", ""),
         })
 
+    domain_names = {d["code"]: d["domain_name"] for d in fetch_all_domains()}
+    avail_domains = [
+        {"code": code, "name_uk": name}
+        for code, name in domain_names.items()
+        if any(r["domain"] == code for r in all_rows_in_runs)
+    ]
+
     avail_categories = []
     for c_code in QUERY_CATEGORIES.keys():
         if any(r["category"] == c_code for r in all_rows_in_runs):
@@ -949,6 +961,8 @@ def compute_flexible_analytics(
     if categories is not None and len(categories) > 0:
         cat_set = set(categories)
         rows = [r for r in rows if r["category"] in cat_set]
+    if domains:
+        rows = [r for r in rows if r["domain"] in set(domains)]
 
     balanced_rows, balance_info = _filter_balanced_intersection(rows, balanced_only=balanced_only)
     payload = _build_analytics_payload(balanced_rows, prompts_map, include_self_judged=include_self_judged)
@@ -985,6 +999,7 @@ def compute_flexible_analytics(
         "models": avail_models,
         "prompts": avail_prompts,
         "categories": avail_categories,
+        "domains": avail_domains,
     }
     payload["by_run"] = by_run
     return payload

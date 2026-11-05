@@ -87,6 +87,16 @@ function renderAnalyticsSubFilterCheckboxes(availableFilters) {
         </label>
     `).join('');
 
+    const domainsBox = document.getElementById('analyticsDomainsFilterBox');
+    if (domainsBox) {
+        domainsBox.innerHTML = (availableFilters.domains || []).map(d => `
+            <label class="flex items-center gap-2 p-1 rounded bg-white border border-slate-200 cursor-pointer">
+                <input type="checkbox" name="anDomain" value="${escapeHtml(d.code)}" checked onchange="loadFlexibleAnalytics(false)" class="rounded text-blue-600">
+                <span class="font-medium text-slate-800 truncate">${escapeHtml(d.name_uk)}</span>
+            </label>
+        `).join('');
+    }
+
     const catsBox = document.getElementById('analyticsCategoriesFilterBox');
     catsBox.innerHTML = (availableFilters.categories || []).map(c => `
         <label class="flex items-center gap-2 p-1 rounded bg-white border border-slate-200 cursor-pointer">
@@ -103,49 +113,58 @@ function toggleAllSubFilters(inputName, checkState) {
     loadFlexibleAnalytics(false);
 }
 
+let _analyticsRequestSeq = 0;
+
+function checkedValues(inputName, rebuild) {
+    return rebuild ? null : Array.from(document.querySelectorAll(`input[name="${inputName}"]:checked`)).map(el => el.value);
+}
+
+function showAnalyticsError(message) {
+    const box = document.getElementById('analyticsNoticesBanner');
+    if (box) box.innerHTML = `<div class="p-3 rounded-lg border border-rose-300 bg-rose-50 text-rose-800 text-sm">${escapeHtml(message)}</div>`;
+}
+
 async function loadFlexibleAnalytics(rebuildSubFilters = false) {
     if (!APP_STATE.selectedAnalyticsRunIds || APP_STATE.selectedAnalyticsRunIds.length === 0) return;
 
-    const selectedModels = rebuildSubFilters
-        ? null
-        : Array.from(document.querySelectorAll('input[name="anModel"]:checked')).map(el => el.value);
-    const selectedPrompts = rebuildSubFilters
-        ? null
-        : Array.from(document.querySelectorAll('input[name="anPrompt"]:checked')).map(el => el.value);
-    const selectedCategories = rebuildSubFilters
-        ? null
-        : Array.from(document.querySelectorAll('input[name="anCategory"]:checked')).map(el => el.value);
-
-    const balancedOnly = document.getElementById('anBalancedOnlyCheckbox')?.checked ?? true;
-    const includeSelfJudged = document.getElementById('anIncludeSelfJudgedCheckbox')?.checked ?? false;
-
-    const resp = await fetch('/api/analytics/flexible', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            run_ids: APP_STATE.selectedAnalyticsRunIds,
-            model_ids: selectedModels,
-            prompt_codes: selectedPrompts,
-            categories: selectedCategories,
-            balanced_only: balancedOnly,
-            include_self_judged: includeSelfJudged,
-        })
-    });
-    const data = await resp.json();
-    if (!data || !data.overall) return;
+    // Відповідь на давніший запит не повинна перезаписати новіший, якщо фільтри перемикали швидко
+    const requestId = ++_analyticsRequestSeq;
+    let data;
+    try {
+        const resp = await fetch('/api/analytics/flexible', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_ids: APP_STATE.selectedAnalyticsRunIds,
+                model_ids: checkedValues('anModel', rebuildSubFilters),
+                prompt_codes: checkedValues('anPrompt', rebuildSubFilters),
+                categories: checkedValues('anCategory', rebuildSubFilters),
+                domains: checkedValues('anDomain', rebuildSubFilters),
+                balanced_only: document.getElementById('anBalancedOnlyCheckbox')?.checked ?? true,
+                include_self_judged: document.getElementById('anIncludeSelfJudgedCheckbox')?.checked ?? false,
+            })
+        });
+        if (!resp.ok) throw new Error(`Сервер повернув помилку ${resp.status}`);
+        data = await resp.json();
+    } catch (err) {
+        if (requestId === _analyticsRequestSeq) showAnalyticsError(`Не вдалося завантажити результати: ${err.message}`);
+        return;
+    }
+    if (requestId !== _analyticsRequestSeq || !data || !data.overall) return;
 
     if (rebuildSubFilters && data.available_filters) {
         renderAnalyticsSubFilterCheckboxes(data.available_filters);
     }
 
     document.getElementById('analyticsRunMeta').textContent =
-        `Обрано серій: ${APP_STATE.selectedAnalyticsRunIds.length} | Замірів у вибірці: n=${data.overall.count} (до балансування: ${data.total_raw_items ?? data.overall.count})`;
+        `Обрано серій: ${APP_STATE.selectedAnalyticsRunIds.length} | Замірів у вибірці: ${data.overall.count} (до балансування: ${data.total_raw_items ?? data.overall.count})`;
 
     APP_STATE.latestAnalyticsData = data;
     renderAnalyticsBanners(data);
-    renderAnalyticsKpis(data);
+    renderResultsOverview(data);
     renderConclusion(data.conclusion);
     renderCascadeControls(data);
+    runCascadeSimulation({ silent: true });
     renderDecisionSupportAdvisor(data);
     initRoiCalculator(data);
     renderMultiRunsTable(data.by_run || []);
@@ -178,7 +197,7 @@ function renderConclusion(c) {
     ).join('');
 
     document.getElementById('conclusionCaveats').innerHTML =
-        (c.caveats_uk || []).map(x => `<li>${x}</li>`).join('');
+        (c.caveats_uk || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
 }
 
 function renderCascadeControls(data) {
@@ -217,15 +236,18 @@ function renderCascadeControls(data) {
     }
 }
 
-async function runCascadeSimulation() {
+async function runCascadeSimulation(options = {}) {
     const errBox = document.getElementById('cascadeError');
     const result = document.getElementById('cascadeResult');
     errBox.classList.add('hidden');
     const cheap = document.getElementById('cascadeCheap').value;
     const strong = document.getElementById('cascadeStrong').value;
+    if (!cheap || !strong) return;
     if (cheap === strong) {
-        errBox.textContent = 'Оберіть дві різні моделі.';
-        errBox.classList.remove('hidden');
+        if (!options.silent) {
+            errBox.textContent = 'Оберіть дві різні моделі.';
+            errBox.classList.remove('hidden');
+        }
         return;
     }
     try {
@@ -641,62 +663,6 @@ function formatCostCellHtml(item) {
     return `<div class="font-mono font-semibold text-slate-800">$${val}</div>${freeBadge}`;
 }
 
-function renderAnalyticsKpis(data) {
-    const ov = data.overall || {};
-    const byModel = data.by_model || [];
-    const byPrompt = data.by_prompt || [];
-    const bestM = byModel.length ? [...byModel].sort((a, b) => b.integral_efficiency_pct - a.integral_efficiency_pct)[0] : null;
-    const bestP = byPrompt.length ? [...byPrompt].sort((a, b) => b.integral_efficiency_pct - a.integral_efficiency_pct)[0] : null;
-
-    const fcLow = ov.fact_coverage_ci95?.[0] ?? ov.stats?.fact_coverage_pct?.ci95_low ?? 0;
-    const fcHigh = ov.fact_coverage_ci95?.[1] ?? ov.stats?.fact_coverage_pct?.ci95_high ?? 0;
-    const commonPairs = data.balanced_pairs_count ?? data.balance_info?.common_queries_count ?? 0;
-    const costSub = (ov.cost_unknown || ov.cost_per_1m_usd == null)
-        ? 'ціна не задана'
-        : `$${Number(ov.cost_per_1m_usd).toFixed(2)}/1M${ov.is_free_tier ? ' (безкошт. тариф)' : ''}`;
-
-    const cards = [
-        {
-            label: 'Обсяг вибірки (запитів n)',
-            val: `n = ${ov.count || 0}`,
-            sub: `Спільних пар: ${commonPairs}`
-        },
-        {
-            label: 'Найкраща модель (Q_det)',
-            val: bestM ? `${bestM.integral_efficiency_pct}%` : '-',
-            sub: bestM ? `${bestM.model_name} (n=${bestM.count})` : ''
-        },
-        {
-            label: 'Найкращий промпт (Q_det)',
-            val: bestP ? `${bestP.prompt_code} (${bestP.integral_efficiency_pct}%)` : '-',
-            sub: bestP ? `${bestP.strategy_type} (n=${bestP.count})` : ''
-        },
-        {
-            label: 'Повнота фактів FC (95% ДІ)',
-            val: `${ov.fact_coverage_pct || 0}%`,
-            sub: `ДІ: [${fcLow}; ${fcHigh}]% | Галюц.: ${ov.hallucination_rate_pct ?? 0}%`
-        },
-        {
-            label: 'Рівень автоматизації AR',
-            val: `${ov.automation_rate_pct || 0}%`,
-            sub: `Шлюз F1: ${ov.escalation_matrix?.f1_pct ?? 0}% (FN: ${ov.escalation_matrix?.fn_rate_pct ?? 0}%)`
-        },
-        {
-            label: 'Затримка (Сер / Мед)',
-            val: `${ov.latency_mean_ms || 0} / ${ov.latency_median_ms || 0} мс`,
-            sub: `P95: ${ov.latency_p95_ms || 0} мс | ${costSub}`
-        },
-    ];
-
-    document.getElementById('analyticsKpiGrid').innerHTML = cards.map(c => `
-        <div class="card-box p-3">
-            <div class="text-[11px] text-slate-500">${c.label}</div>
-            <div class="text-base sm:text-lg font-extrabold text-slate-900 mt-0.5">${c.val}</div>
-            <div class="text-[11px] text-slate-500 truncate">${c.sub}</div>
-        </div>
-    `).join('');
-}
-
 function renderAnalyticsCharts(data) {
     const byModel = data.by_model || [];
     const byPrompt = data.by_prompt || [];
@@ -868,57 +834,13 @@ function renderPromptsComparisonTable(byPrompt) {
 }
 
 function renderHeatmaps(data) {
-    const byModel = data.by_model || [];
-    const byPrompt = data.by_prompt || [];
-    const byCat = data.by_category || [];
-    const matMP = data.matrix_model_prompt || {};
-    const matMC = data.matrix_model_category || {};
-
-    let htmlMP = `<table class="w-full text-xs border-collapse"><thead><tr class="bg-slate-100">
-        <th class="p-2 text-left border">Модель</th>
-        ${byPrompt.map(p => `<th class="p-2 text-center border">${escapeHtml(p.prompt_code)}</th>`).join('')}
-    </tr></thead><tbody>`;
-    byModel.forEach(m => {
-        htmlMP += `<tr><td class="p-2 font-semibold border">${escapeHtml(m.model_name)}</td>`;
-        byPrompt.forEach(p => {
-            const cell = matMP[m.model_id]?.[p.prompt_code];
-            const val = cell ? cell.integral_efficiency_pct : null;
-            const n = cell ? cell.n : 0;
-            const warn = cell && cell.insufficient_sample ? ' (n<5)' : '';
-            htmlMP += val !== null
-                ? `<td class="p-2 text-center border ${getHeatClass(val)}" title="FC=${cell.fact_coverage_pct}%, n=${n}">
-                    <div>${val}%${warn}</div>
-                    <div class="text-[10px] font-normal opacity-80">n=${n}</div>
-                   </td>`
-                : `<td class="p-2 text-center border text-slate-300">-</td>`;
-        });
-        htmlMP += `</tr>`;
-    });
-    htmlMP += `</tbody></table>`;
-    document.getElementById('matrixModelPromptContainer').innerHTML = htmlMP;
-
-    let htmlMC = `<table class="w-full text-xs border-collapse"><thead><tr class="bg-slate-100">
-        <th class="p-2 text-left border">Модель</th>
-        ${byCat.map(c => `<th class="p-2 text-center border">${escapeHtml(c.category_name_uk)}</th>`).join('')}
-    </tr></thead><tbody>`;
-    byModel.forEach(m => {
-        htmlMC += `<tr><td class="p-2 font-semibold border">${escapeHtml(m.model_name)}</td>`;
-        byCat.forEach(c => {
-            const cell = matMC[m.model_id]?.[c.category_code];
-            const val = cell ? cell.integral_efficiency_pct : null;
-            const n = cell ? cell.n : 0;
-            const warn = cell && cell.insufficient_sample ? ' (n<5)' : '';
-            htmlMC += val !== null
-                ? `<td class="p-2 text-center border ${getHeatClass(val)}" title="FC=${cell.fact_coverage_pct}%, n=${n}">
-                    <div>${val}%${warn}</div>
-                    <div class="text-[10px] font-normal opacity-80">n=${n}</div>
-                   </td>`
-                : `<td class="p-2 text-center border text-slate-300">-</td>`;
-        });
-        htmlMC += `</tr>`;
-    });
-    htmlMC += `</tbody></table>`;
-    document.getElementById('matrixModelCategoryContainer').innerHTML = htmlMC;
+    const models = (data.by_model || []).map(m => ({ id: m.model_id, name: m.model_name }));
+    const prompts = (data.by_prompt || []).map(p => ({ id: p.prompt_code, name: p.prompt_code }));
+    const categories = (data.by_category || []).map(c => ({ id: c.category_code, name: c.category_name_uk }));
+    document.getElementById('matrixModelPromptContainer').innerHTML =
+        matrixTableHtml(models, prompts, data.matrix_model_prompt || {});
+    document.getElementById('matrixModelCategoryContainer').innerHTML =
+        matrixTableHtml(models, categories, data.matrix_model_category || {});
 }
 
 function renderStatisticalTestsAndEscalation(data) {

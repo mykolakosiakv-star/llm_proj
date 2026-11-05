@@ -180,5 +180,6 @@ class FlexibleAnalyticsRequest(BaseModel):
     model_ids: Optional[List[str]] = Field(default=None)
     prompt_codes: Optional[List[str]] = Field(default=None)
     categories: Optional[List[str]] = Field(default=None)
+    domains: Optional[List[str]] = Field(default=None)
     balanced_only: bool = Field(default=True)
     include_self_judged: bool = Field(default=False)

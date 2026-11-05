@@ -837,6 +837,7 @@ async def api_get_flexible_analytics(payload: FlexibleAnalyticsRequest):
         model_ids=payload.model_ids,
         prompt_codes=payload.prompt_codes,
         categories=payload.categories,
+        domains=payload.domains,
         balanced_only=payload.balanced_only,
         include_self_judged=payload.include_self_judged,
     )

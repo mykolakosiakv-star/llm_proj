@@ -1495,3 +1495,61 @@ def test_seed_does_not_overwrite_user_edits_to_existing_queries():
         assert next(q for q in fetch_all_queries() if q["code"] == item["code"])["user_query"].endswith("(правка користувача)")
     finally:
         upsert_query_item({**item, "user_query": original})
+
+
+def _cell(q, n=40):
+    return {"n": n, "integral_efficiency_pct": q}
+
+
+def test_h1_verdicts_on_synthetic_matrices():
+    from app.services.hypotheses import assess_h1
+    names = {"x": "Модель X", "y": "Модель Y"}
+    domains = {"a": "Сфера A", "b": "Сфера B"}
+    differ = {"x": {"a": _cell(85), "b": _cell(70)}, "y": {"a": _cell(75), "b": _cell(78)}}
+    assert assess_h1(differ, names, domains, n_queries=80)["verdict"] == "supported"
+    same = {"x": {"a": _cell(85), "b": _cell(80)}, "y": {"a": _cell(75), "b": _cell(70)}}
+    assert assess_h1(same, names, domains, n_queries=80)["verdict"] == "not_supported"
+    # Маленька вибірка: вердикту немає, але попередній висновок показується окремо
+    small = assess_h1(differ, names, domains, n_queries=25)
+    assert small["verdict"] == "insufficient" and small["preliminary_uk"] and "25" in small["missing_uk"]
+    # Розрив у межах шуму не є підтвердженням
+    close = {"x": {"a": _cell(80), "b": _cell(79)}, "y": {"a": _cell(79), "b": _cell(80.5)}}
+    assert assess_h1(close, names, domains, n_queries=80)["verdict"] == "insufficient"
+    # Одна сфера або мало запитів у комірках
+    assert assess_h1({"x": {"a": _cell(80)}, "y": {"a": _cell(70)}}, names, domains, 80)["verdict"] == "insufficient"
+    thin = {"x": {"a": _cell(85, 5), "b": _cell(70, 5)}, "y": {"a": _cell(75, 5), "b": _cell(78, 5)}}
+    assert assess_h1(thin, names, domains, 80)["verdict"] == "insufficient"
+
+
+def _group(name, q, **extra):
+    return {"model_name": name, "prompt_name_uk": name, "context_mode_name_uk": name, "count": 40, "integral_efficiency_pct": q, **extra}
+
+
+def test_h2_compares_spread_of_prompts_and_context_with_models():
+    from app.services.hypotheses import assess_h2
+    models = [_group("M1", 80), _group("M2", 78)]
+    strong_prompt = [_group("P1", 60), _group("P3", 80)]
+    weak_prompt = [_group("P1", 79), _group("P3", 80)]
+    assert assess_h2(models, strong_prompt, [], 60)["verdict"] == "supported"
+    assert assess_h2(models, weak_prompt, [], 60)["verdict"] == "not_supported"
+    assert assess_h2(models, [], [_group("без контексту", 50), _group("пошук", 78)], 60)["verdict"] == "supported"
+    assert assess_h2([_group("M1", 80)], strong_prompt, [], 60)["verdict"] == "insufficient"
+    assert assess_h2(models, strong_prompt, [], 10)["verdict"] == "insufficient"
+
+
+def _priced(name, q, cost, fn=0.0, known=True):
+    return {"model_id": name, "model_name": name, "count": 40, "integral_efficiency_pct": q, "price_known": known,
+            "cost_per_1m_usd": cost if known else None, "hallucination_rate_pct": 0.0, "escalation_matrix": {"fn_rate_pct": fn}}
+
+
+def test_h3_needs_a_cheaper_model_that_is_not_less_safe():
+    from app.services.hypotheses import assess_h3
+    assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 83, 0.5)], 60)["verdict"] == "supported"
+    # дешева модель надто програє за якістю або пропускає більше ескалацій
+    assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 70, 0.5)], 60)["verdict"] == "not_supported"
+    assert assess_h3([_priced("strong", 85, 10.0, fn=1.0), _priced("cheap", 84, 0.5, fn=8.0)], 60)["verdict"] == "not_supported"
+    # лідер уже найдешевший
+    assert assess_h3([_priced("best", 90, 0.4), _priced("other", 80, 5.0)], 60)["verdict"] == "supported"
+    # ціни немає: невідома ціна не вважається нулем
+    assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 83, 0.0, known=False)], 60)["verdict"] == "insufficient"
+    assert assess_h3([_priced("strong", 85, 10.0), _priced("cheap", 83, 0.5)], 12)["verdict"] == "insufficient"

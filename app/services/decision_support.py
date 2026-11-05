@@ -18,7 +18,7 @@ def _model_fn_rate(m: Dict[str, Any]) -> float:
     return float(esc.get("critical_fn_rate_pct") or esc.get("fn_rate_pct") or 0.0)
 
 
-def _pick_recommended(models: List[Dict[str, Any]]) -> Dict[str, Any]:
+def pick_recommended(models: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Найкраща за Q_det модель; дешевша підміна лише якщо вона не гірша за безпекою."""
     best = max(models, key=lambda m: float(m.get("integral_efficiency_pct") or 0.0))
     best_q = float(best.get("integral_efficiency_pct") or 0.0)
@@ -82,7 +82,7 @@ def build_conclusion(
     models = [m for m in by_model if m.get("count")]
     if not models:
         return {"available": False}
-    pick = _pick_recommended(models)
+    pick = pick_recommended(models)
     chosen, best = pick["model"], pick["best"]
     q_chosen = float(chosen.get("integral_efficiency_pct") or 0.0)
     cost = chosen.get("cost_per_1m_usd")
