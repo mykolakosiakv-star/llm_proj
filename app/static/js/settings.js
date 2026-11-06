@@ -291,100 +291,109 @@ async function deleteCustomModelEntry(modelKey) {
 }
 
 const MIN_QUERIES_PER_DOMAIN = 30;
+let _estimateRequestSeq = 0;
 
-// Скільки різних запитів реально піде в серію по кожній сфері і чи вистачає для висновків
-function sampleSizeHintHtml(domain, categories, maxPerCategory, equalDomains) {
-    const domainCodes = domain === 'all' ? Object.keys(APP_STATE.metadata?.domains || {}) : [domain];
-    const perDomain = {};
-    domainCodes.forEach(code => {
-        perDomain[code] = categories.reduce((sum, cat) => {
-            const available = (APP_STATE.queries || []).filter(q => (q.domain || 'fintech') === code && q.category === cat).length;
-            return sum + Math.min(maxPerCategory, available);
-        }, 0);
-    });
-    const counts = Object.values(perDomain);
-    if (!counts.length) return '';
-    const effective = equalDomains && domain === 'all' ? Math.min(...counts) : null;
-    const lacking = Object.entries(perDomain).filter(([, n]) => (effective ?? n) < MIN_QUERIES_PER_DOMAIN);
-    const names = APP_STATE.metadata?.domains || {};
-    const summary = effective !== null
-        ? `У кожній сфері піде по ${effective} запитів.`
-        : Object.entries(perDomain).map(([code, n]) => `${names[code]?.name_uk || code}: ${n}`).join('; ') + '.';
-    const warning = lacking.length
-        ? `Для висновків за гіпотезами потрібно не менше ${MIN_QUERIES_PER_DOMAIN} запитів на сферу. Поки цього не вистачає, результат буде попереднім. Додайте запити на вкладці «Дані».`
-        : 'Запитів достатньо для висновків за гіпотезами.';
-    return `<div class="mb-1.5 ${lacking.length ? 'text-amber-800' : 'text-emerald-800'}">${escapeHtml(summary)} ${escapeHtml(warning)}</div>`;
+const LIMIT_SOURCE_LABELS = { header: 'за даними провайдера', manual: 'вказано вручну', catalog: 'припущення, не перевірено' };
+
+function readExpForm() {
+    const checked = name => Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
+    const contextModes = checked('expContextMode');
+    return {
+        domains: getSelectedExpDomains(),
+        modelIds: checked('expModel'),
+        promptCodes: checked('expPrompt'),
+        categories: checked('expCategory'),
+        contextModes: contextModes.length ? contextModes : ['gold_context'],
+        maxQueries: Number(document.getElementById('expMaxQueriesInput')?.value) || 2,
+        repeats: Number(document.getElementById('expRepeatsInput')?.value) || 1,
+        judgeModelId: document.getElementById('expJudgeModelSelect')?.value || null,
+        equalDomains: document.getElementById('expEqualDomainSample')?.checked ?? true,
+    };
 }
 
-let _estimateRequestSeq = 0;
+function estimateSelectionHtml(sel) {
+    const lacking = sel.by_domain.filter(d => d.selected < MIN_QUERIES_PER_DOMAIN);
+    const rows = sel.by_domain.map(d => `<li>${escapeHtml(d.name)}: ${d.selected} з ${d.available} доступних</li>`).join('');
+    const note = lacking.length
+        ? `Для висновків за гіпотезами потрібно не менше ${MIN_QUERIES_PER_DOMAIN} запитів на сферу, а в ${lacking.map(d => escapeHtml(d.name)).join(', ')} їх менше. Додайте й затвердіть запити на вкладці «Дані».`
+        : 'Запитів достатньо для висновків за гіпотезами.';
+    return `<div>
+        <div class="text-2xl font-semibold text-slate-900">${sel.total}</div>
+        <div class="text-xs text-slate-500">запитів у серії (вибір випадковий, зерно ${sel.seed})</div>
+        <ul class="text-xs text-slate-600 mt-1 space-y-0.5 list-disc pl-4">${rows}</ul>
+        <p class="text-xs mt-1 ${lacking.length ? 'text-amber-800' : 'text-emerald-800'}">${note}</p>
+    </div>`;
+}
+
+function estimateQuotaHtml(res) {
+    const rows = (res.models || []).map(m => {
+        const remaining = m.remaining_rpd === null || m.remaining_rpd === undefined ? 'ліміт невідомий' : `залишок ${m.remaining_rpd} з ${m.rpd}`;
+        const source = m.rpd ? ` (${LIMIT_SOURCE_LABELS[m.rpd_source] || m.rpd_source})` : '';
+        const bad = m.quota_exceeded || m.exhausted_now;
+        return `<tr class="border-b border-slate-100"><td class="py-1 pr-2">${escapeHtml(m.name)}</td><td class="py-1 pr-2">${m.calls}</td>
+            <td class="py-1 ${bad ? 'text-amber-800' : 'text-slate-600'}">${m.exhausted_now ? 'ліміт на сьогодні вичерпано' : remaining + source}</td></tr>`;
+    }).join('');
+    return `<div>
+        <div class="text-xs font-medium text-slate-700 mb-1">Добові ліміти моделей</div>
+        <table class="w-full text-xs text-left"><thead class="text-slate-500"><tr><th class="py-1 pr-2 font-medium">Модель</th><th class="py-1 pr-2 font-medium">Викликів</th><th class="py-1 font-medium">Ліміт</th></tr></thead><tbody>${rows}</tbody></table>
+        ${res.quota_warnings?.length ? `<p class="text-xs text-amber-800 mt-1">${res.quota_warnings.map(escapeHtml).join('. ')}.</p>` : ''}
+    </div>`;
+}
+
+function renderEstimate(box, res, form) {
+    const combos = form.modelIds.length * form.promptCodes.length * form.contextModes.length;
+    const costText = res.has_unknown_price
+        ? (res.est_total_cost_usd > 0 ? `$${res.est_total_cost_usd.toFixed(4)} і ціна не задана для частини моделей` : 'ціна не задана')
+        : `$${Number(res.est_total_cost_usd || 0).toFixed(4)}`;
+    const mins = Math.floor((res.est_duration_sec || 0) / 60);
+    const timeText = mins > 0 ? `близько ${mins} хв` : `близько ${res.est_duration_sec || 0} с`;
+    box.innerHTML = `
+        ${estimateSelectionHtml(res.selection)}
+        <div class="border-t border-slate-200 pt-2">
+            <div class="text-2xl font-semibold text-slate-900">${res.total_generation_calls}${res.total_judge_calls ? ` + ${res.total_judge_calls}` : ''}</div>
+            <div class="text-xs text-slate-500">викликів${res.total_judge_calls ? ' (відповіді + суддя)' : ''}</div>
+            <p class="text-xs text-slate-600 mt-1">${res.queries_count} запитів × ${form.modelIds.length} моделей × ${form.promptCodes.length} промптів × ${form.contextModes.length} режимів контексту × ${form.repeats} повторів. Комбінацій на запит: ${combos * form.repeats}.</p>
+        </div>
+        <div class="border-t border-slate-200 pt-2 text-xs text-slate-700 space-y-0.5">
+            <div>Час: ${timeText}</div>
+            <div>Вартість: ${escapeHtml(costText)}</div>
+        </div>
+        <div class="border-t border-slate-200 pt-2">${estimateQuotaHtml(res)}</div>`;
+}
 
 async function updateBatchExperimentEstimate() {
     const box = document.getElementById('expEstimateContent');
     if (!box) return;
     // Відповідь на давніший запит не повинна перезаписати новіший
     const requestId = ++_estimateRequestSeq;
+    const form = readExpForm();
 
-    const domain = document.getElementById('expDomainSelect')?.value || 'fintech';
-    const modelIds = Array.from(document.querySelectorAll('input[name="expModel"]:checked')).map(el => el.value);
-    const promptCodes = Array.from(document.querySelectorAll('input[name="expPrompt"]:checked')).map(el => el.value);
-    const categories = Array.from(document.querySelectorAll('input[name="expCategory"]:checked')).map(el => el.value);
-    const contextModes = Array.from(document.querySelectorAll('input[name="expContextMode"]:checked')).map(el => el.value);
-    const maxQueries = Number(document.getElementById('expMaxQueriesInput')?.value) || 2;
-    const repeats = Number(document.getElementById('expRepeatsInput')?.value) || 1;
-    const judgeModelId = document.getElementById('expJudgeModelSelect')?.value || null;
-    const equalDomains = document.getElementById('expEqualDomainSample')?.checked ?? true;
-
-    if (!modelIds.length || !promptCodes.length || !categories.length) {
-        box.innerHTML = `<span class="text-slate-500">Оберіть принаймні одну модель, промпт і категорію для розрахунку прогнозу.</span>`;
+    if (!form.domains.length || !form.modelIds.length || !form.promptCodes.length || !form.categories.length) {
+        box.innerHTML = '<span class="text-slate-500">Оберіть сфери, моделі, промпти та категорії, щоб побачити підсумок.</span>';
         return;
     }
-
     try {
         const res = await fetch('/api/experiments/estimate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                domain,
-                model_ids: modelIds,
-                prompt_codes: promptCodes,
-                categories,
-                context_modes: contextModes.length ? contextModes : ['gold_context'],
-                max_queries_per_category: maxQueries,
-                repeats,
-                use_judge: Boolean(judgeModelId),
-                judge_model_id: judgeModelId,
+                domain: form.domains[0],
+                domains: form.domains,
+                equal_domain_sample: form.equalDomains,
+                model_ids: form.modelIds,
+                prompt_codes: form.promptCodes,
+                categories: form.categories,
+                context_modes: form.contextModes,
+                max_queries_per_category: form.maxQueries,
+                repeats: form.repeats,
+                use_judge: Boolean(form.judgeModelId),
+                judge_model_id: form.judgeModelId,
             }),
         }).then(r => r.json());
         if (requestId !== _estimateRequestSeq) return;
-
-        const costText = res.has_unknown_price
-            ? (res.est_total_cost_usd > 0 ? `$${res.est_total_cost_usd.toFixed(4)} + ціна не задана` : 'ціна не задана')
-            : `$${Number(res.est_total_cost_usd || 0).toFixed(4)}`;
-        const mins = Math.floor((res.est_duration_sec || 0) / 60);
-        const secs = (res.est_duration_sec || 0) % 60;
-        const timeStr = mins > 0 ? `~${mins} хв ${secs} с` : `~${secs} с`;
-
-        let warnHtml = '';
-        if (res.quota_warnings && res.quota_warnings.length > 0) {
-            warnHtml = `<div class="mt-1.5 p-2 rounded bg-amber-50 border border-amber-300 text-amber-900 font-semibold">
-                Попередження RPD: ${res.quota_warnings.map(w => escapeHtml(w)).join('; ')}
-            </div>`;
-        }
-
-        box.innerHTML = `
-            ${sampleSizeHintHtml(domain, categories, maxQueries, equalDomains)}
-            <div class="flex flex-wrap justify-between gap-2">
-                <span>Викликів генерації: <b>${res.total_generation_calls}</b>${res.total_judge_calls > 0 ? ` + суддя: <b>${res.total_judge_calls}</b>` : ''}</span>
-                <span>Орієнтовний час: <b>${timeStr}</b></span>
-            </div>
-            <div class="flex flex-wrap justify-between gap-2 mt-0.5">
-                <span>Оцінка вартості: <b class="font-mono">${escapeHtml(costText)}</b></span>
-                <span>Денна квота: <b class="${res.quota_sufficient ? 'text-emerald-700' : 'text-amber-800'}">${res.quota_sufficient ? 'достатньо' : 'перевищення RPD'}</b></span>
-            </div>
-            ${warnHtml}
-        `;
+        renderEstimate(box, res, form);
     } catch (_) {
-        box.textContent = 'Не вдалося розрахувати прогноз.';
+        box.textContent = 'Не вдалося розрахувати підсумок.';
     }
 }
 

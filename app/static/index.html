@@ -303,6 +303,200 @@
 
         <!-- ВКЛАДКА: ЕКСПЕРИМЕНТИ -->
         <section id="tab-experiments" class="hidden space-y-5">
+            <div class="card-box p-5 space-y-3">
+                <div>
+                    <h2 class="font-semibold text-slate-900 text-base">Нова серія</h2>
+                    <p class="text-sm text-slate-600 max-w-3xl">
+                        Серія виконує конвеєр відповіді на наборі тестових запитів для обраних моделей і вимірює результат. Найпростіше почати з готового набору параметрів під гіпотезу, а потім за потреби змінити їх.
+                    </p>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button type="button" onclick="applyExperimentPreset('h1')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-3 text-left text-sm">
+                        <div class="font-semibold text-slate-900">H1: залежить від сфери</div>
+                        <div class="text-slate-600 text-xs mt-0.5">Усі сфери, по рівній кількості запитів, кілька моделей.</div>
+                    </button>
+                    <button type="button" onclick="applyExperimentPreset('h2')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-3 text-left text-sm">
+                        <div class="font-semibold text-slate-900">H2: промпт і контекст</div>
+                        <div class="text-slate-600 text-xs mt-0.5">Одна сфера, три промпти, усі режими контексту.</div>
+                    </button>
+                    <button type="button" onclick="applyExperimentPreset('h3')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-3 text-left text-sm">
+                        <div class="font-semibold text-slate-900">H3: чи досить дешевої моделі</div>
+                        <div class="text-slate-600 text-xs mt-0.5">Усі сфери, дешева й сильніша модель.</div>
+                    </button>
+                </div>
+                <p id="expPresetNote" class="text-xs text-slate-500">Оберіть гіпотезу, і параметри заповняться під неї. Їх можна змінити нижче.</p>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+                <div class="xl:col-span-8 space-y-5">
+                    <div id="expErrorBox" class="hidden p-3 rounded-lg border border-rose-300 bg-rose-50 text-rose-800 text-sm"></div>
+
+                    <div class="card-box p-5 space-y-4">
+                        <div>
+                            <h3 class="font-semibold text-slate-900 text-base">Які запити брати</h3>
+                            <p class="text-sm text-slate-600">З кожної обраної сфери й категорії береться до N запитів. Якщо їх у базі більше, вибір випадковий, але відтворюваний: за однакових налаштувань завжди виходять ті самі запити. У серію потрапляють лише перевірені запити, чернетки не беруться.</p>
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-1.5">
+                                <span class="text-xs font-medium text-slate-700">Сфери</span>
+                                <span class="text-xs"><button type="button" onclick="toggleAllExpDomains(true)" class="text-blue-700 hover:underline">Усі</button> <span class="text-slate-300">|</span> <button type="button" onclick="toggleAllExpDomains(false)" class="text-slate-600 hover:underline">Жодної</button></span>
+                            </div>
+                            <div id="expDomainsBox" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+                        </div>
+                        <div>
+                            <div class="text-xs font-medium text-slate-700 mb-1.5">Категорії запитів</div>
+                            <div id="expCategoriesCheckboxes" class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-sm"></div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                            <div>
+                                <label for="expMaxQueriesInput" class="block text-xs font-medium text-slate-700 mb-1">Запитів на сферу в кожній категорії (1-12)</label>
+                                <input id="expMaxQueriesInput" type="number" min="1" max="12" value="6" onchange="updateBatchExperimentEstimate()" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                                <p class="text-xs text-slate-500 mt-1">Наприклад, 6 запитів, 4 сфери й 5 категорій дають до 120 запитів у серії. Підсумок праворуч показує точне число.</p>
+                            </div>
+                            <label class="flex items-start gap-2 cursor-pointer text-sm text-slate-700 pt-6">
+                                <input type="checkbox" id="expEqualDomainSample" checked onchange="updateBatchExperimentEstimate()" class="mt-0.5 rounded text-blue-600">
+                                <span>Однакова кількість у всіх сферах
+                                    <span class="block text-xs text-slate-500">Потрібно для порівняння сфер (H1): у кожній категорії береться стільки запитів, скільки є в найменшій сфері.</span>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card-box p-5 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <h3 class="font-semibold text-slate-900 text-base">Моделі для тестування</h3>
+                                <p class="text-sm text-slate-600">Тільки увімкнені моделі. Ліміти безкоштовних тарифів малі, тому не обирайте зайвого.</p>
+                            </div>
+                            <div class="text-xs">
+                                <button type="button" onclick="toggleAllExpModelsCheckboxes(true)" class="text-blue-700 hover:underline">Усі</button>
+                                <span class="text-slate-300">|</span>
+                                <button type="button" onclick="toggleAllExpModelsCheckboxes(false)" class="text-slate-600 hover:underline">Жодної</button>
+                                <span class="text-slate-300">|</span>
+                                <button type="button" onclick="switchTab('settings')" class="text-slate-600 hover:underline">Керувати моделями</button>
+                            </div>
+                        </div>
+                        <div id="expModelsCheckboxes" class="space-y-1.5 max-h-72 overflow-y-auto"></div>
+                    </div>
+
+                    <div class="card-box p-5 space-y-4">
+                        <div>
+                            <h3 class="font-semibold text-slate-900 text-base">Промпти і контекст</h3>
+                            <p class="text-sm text-slate-600">Кожна комбінація моделі, промпту й режиму контексту виконується окремо, тому їх кількість множиться.</p>
+                        </div>
+                        <div>
+                            <div class="text-xs font-medium text-slate-700 mb-1.5">Стратегії промпту</div>
+                            <div id="expPromptsCheckboxes" class="space-y-1.5"></div>
+                        </div>
+                        <div>
+                            <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                                <span class="text-xs font-medium text-slate-700">Контекст для моделі</span>
+                                <span class="text-xs text-slate-600">Фрагментів у пошуку <input id="expTopKInput" type="number" min="1" max="10" value="3" onchange="updateBatchExperimentEstimate()" class="w-14 border border-slate-300 rounded px-2 py-0.5 text-center"></span>
+                            </div>
+                            <div id="expContextModesCheckboxes" class="space-y-1.5 text-sm">
+                                <label class="flex items-start gap-2 cursor-pointer"><input type="checkbox" name="expContextMode" value="retrieved_context" onchange="updateBatchExperimentEstimate()" class="mt-1 rounded text-blue-600"><span><b>Пошук у базі знань</b>: те, що буде в реальній роботі.</span></label>
+                                <label class="flex items-start gap-2 cursor-pointer"><input type="checkbox" name="expContextMode" value="gold_context" checked onchange="updateBatchExperimentEstimate()" class="mt-1 rounded text-blue-600"><span><b>Еталонний контекст</b>: модель одразу отримує правильний фрагмент, найкращий можливий випадок.</span></label>
+                                <label class="flex items-start gap-2 cursor-pointer"><input type="checkbox" name="expContextMode" value="no_context" onchange="updateBatchExperimentEstimate()" class="mt-1 rounded text-blue-600"><span><b>Без контексту</b>: модель відповідає лише зі своїх знань, нижня межа.</span></label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-box p-5 space-y-3">
+                        <div>
+                            <h3 class="font-semibold text-slate-900 text-base">Оцінювання відповідей суддею</h3>
+                            <p class="text-sm text-slate-600">Без судді відповіді оцінюються лише за фактами та схожістю до еталона. Суддя додає оцінку за рубрикою. Він має бути з іншої родини, ніж модель, яку оцінює, інакше її відповіді пропускаються.</p>
+                        </div>
+                        <input type="hidden" id="expJudgeModelSelect" value="">
+                        <div id="expJudgeList" class="space-y-1.5 max-h-72 overflow-y-auto"></div>
+                        <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+                            <input type="checkbox" id="expAllowSelfJudge" onchange="renderExpJudgeList(); updateBatchExperimentEstimate()" class="rounded text-blue-600">
+                            <span>Дозволити судді оцінювати модель своєї родини (результат буде позначено як самооцінювання)</span>
+                        </label>
+                    </div>
+
+                    <div class="card-box p-5 space-y-2">
+                        <h3 class="font-semibold text-slate-900 text-base">Повтори</h3>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <input id="expRepeatsInput" type="number" min="1" max="5" value="1" onchange="updateBatchExperimentEstimate()" class="w-20 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                            <p class="text-sm text-slate-600 flex-1 min-w-[16rem]">Скільки разів виконати кожну комбінацію. За температури 0 відповіді майже однакові, тому повтори лише множать вартість і час. Потрібні, щоб виміряти стабільність відповідей. Кількість запитів у вибірці вони не збільшують.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="xl:col-span-4">
+                    <div class="card-box p-5 space-y-4 xl:sticky xl:top-20">
+                        <h3 class="font-semibold text-slate-900 text-base">Підсумок серії</h3>
+                        <div>
+                            <label for="expTitleInput" class="block text-xs font-medium text-slate-700 mb-1">Назва серії</label>
+                            <input id="expTitleInput" type="text" value="Порівняльний тест моделей та промптів" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                        </div>
+                        <div id="expEstimateBox">
+                            <div id="expEstimateContent" class="text-sm text-slate-700 space-y-2">Розрахунок обсягу викликів...</div>
+                        </div>
+                        <button onclick="startNewBatchExperiment()" id="startBatchExpBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition">
+                            Запустити серію
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+
+                    <div class="card-box p-5">
+                        <div class="flex items-center justify-between mb-2.5">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">Історія серій експериментів</h3>
+                                <p class="text-[11px] text-slate-500">Оберіть серію для перегляду замірів або аналітики</p>
+                            </div>
+                        </div>
+                        <div id="experimentRunsListContainer" class="space-y-2 max-h-60 overflow-y-auto text-xs"></div>
+                    </div>
+
+                    <div class="card-box p-5 space-y-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">
+                                    Таблиця виконаних замірів
+                                </h3>
+                                <p class="text-[11px] text-slate-500">
+                                    Натисніть на рядок, щоб відкрити деталі запиту, згенеровану відповідь і розрахунок метрик
+                                </p>
+                            </div>
+                            <div class="flex flex-wrap gap-1.5 text-xs items-center">
+                                <select id="logFilterRunSelect" onchange="onChangeLogTableRun()" class="border border-blue-400 bg-blue-50 text-blue-900 font-semibold rounded px-2 py-1">
+                                </select>
+                                <select id="logFilterModel" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
+                                    <option value="all">Усі моделі</option>
+                                </select>
+                                <select id="logFilterPrompt" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
+                                    <option value="all">Усі промпти</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto max-h-96">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead class="bg-slate-100 text-slate-700 sticky top-0">
+                                    <tr>
+                                        <th class="py-2 px-2">Запит</th>
+                                        <th class="py-2 px-2">Модель</th>
+                                        <th class="py-2 px-2">Промпт</th>
+                                        <th class="py-2 px-2 text-center">Якість, %</th>
+                                        <th class="py-2 px-2 text-center">Повнота фактів, %</th>
+                                        <th class="py-2 px-2 text-center">Галюц.</th>
+                                        <th class="py-2 px-2 text-center">Час, мс</th>
+                                        <th class="py-2 px-2 text-center">Токени</th>
+                                        <th class="py-2 px-2 text-center">Вартість ($/1M)</th>
+                                        <th class="py-2 px-2 text-center">Деталі</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="experimentItemsLogBody" class="divide-y divide-slate-200"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                
+            </div>
+
             <details class="card-box">
                 <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-900">
                     Пробний запит до моделі з розрахунком метрик
@@ -460,202 +654,6 @@
             </div>
                 </div>
             </details>
-
-            <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                <div class="lg:col-span-5 card-box p-5 space-y-4">
-                    <div class="border-b border-slate-200 pb-2.5 flex items-center justify-between">
-                        <div>
-                            <h2 class="font-bold text-slate-900 text-base">Серійний експеримент</h2>
-                            <p class="text-xs text-slate-500">Пакетне тестування обраних моделей, промптів і категорій</p>
-                        </div>
-                        <button onclick="switchTab('settings')" class="text-[11px] text-blue-600 hover:underline font-medium">
-                            Налаштувати моделі
-                        </button>
-                    </div>
-
-                    <div class="space-y-2">
-                        <div class="text-xs font-medium text-slate-700">Що перевіряємо</div>
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <button type="button" onclick="applyExperimentPreset('h1')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
-                                <div class="font-semibold text-slate-900">H1</div>
-                                <div class="text-slate-600">Залежить від сфери</div>
-                            </button>
-                            <button type="button" onclick="applyExperimentPreset('h2')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
-                                <div class="font-semibold text-slate-900">H2</div>
-                                <div class="text-slate-600">Промпт і контекст</div>
-                            </button>
-                            <button type="button" onclick="applyExperimentPreset('h3')" class="border border-slate-300 hover:border-slate-500 rounded-lg p-2 text-left text-xs">
-                                <div class="font-semibold text-slate-900">H3</div>
-                                <div class="text-slate-600">Чи досить дешевої моделі</div>
-                            </button>
-                        </div>
-                        <p id="expPresetNote" class="text-xs text-slate-500">Оберіть гіпотезу, і параметри серії заповняться під неї. Їх можна змінити нижче.</p>
-                    </div>
-
-                    <div id="expErrorBox" class="hidden p-3 rounded-lg bg-rose-50 border border-rose-300 text-rose-800 text-xs font-medium"></div>
-
-                    <div class="space-y-3 text-xs sm:text-sm">
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">Назва серії:</label>
-                            <input id="expTitleInput" type="text" value="Порівняльний тест моделей та промптів" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
-                        </div>
-
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">Предметна сфера типових запитів:</label>
-                            <select id="expDomainSelect" onchange="onExpDomainSelectChange()" class="w-full border border-blue-300 rounded-lg px-3 py-1.5 bg-blue-50/40 font-semibold text-slate-800 text-xs">
-                                <option value="fintech">Фінтех та Інтернет-банкінг (FinCloud)</option>
-                                <option value="it_helpdesk">ІТ-підтримка та SaaS-сервіси (CloudOps)</option>
-                                <option value="ecommerce">Електронна комерція та логістика (MarketHub)</option>
-                                <option value="telecom">Телекомунікації та інтернет (TelecomNet)</option>
-                                <option value="all">Усі предметні сфери разом (мульти-доменний тест)</option>
-                            </select>
-                            <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-700">
-                                <input type="checkbox" id="expEqualDomainSample" checked onchange="updateBatchExperimentEstimate()" class="rounded text-blue-600">
-                                <span>Однакова кількість запитів у кожній сфері</span>
-                            </label>
-                            <div id="expDomainRiskDesc" class="mt-1 text-[11px] text-slate-500">
-                                Фінансовий сектор: суворі числові ліміти, тарифи та обов'язкова ескалація при ризиках безпеки.
-                            </div>
-                        </div>
-
-                        <div>
-                            <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                                <label class="font-semibold text-slate-700">Моделі для тестування:</label>
-                                <div class="flex items-center gap-1.5 text-[11px]">
-                                    <button type="button" onclick="toggleAllExpModelsCheckboxes(true)" class="text-blue-600 hover:underline">Обрати всі</button>
-                                    <span class="text-slate-300">|</span>
-                                    <button type="button" onclick="toggleAllExpModelsCheckboxes(false)" class="text-slate-500 hover:underline">Зняти всі</button>
-                                    <span class="text-slate-300">|</span>
-                                    <button type="button" onclick="switchTab('settings')" class="text-indigo-600 hover:underline font-medium">До списку провайдерів</button>
-                                </div>
-                            </div>
-                            <div id="expModelsCheckboxes" class="space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200 max-h-48 overflow-y-auto"></div>
-                        </div>
-
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">Варіанти промптів (P1-P5):</label>
-                            <div id="expPromptsCheckboxes" class="space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200"></div>
-                        </div>
-
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">Категорії запитів:</label>
-                            <div id="expCategoriesCheckboxes" class="grid grid-cols-2 gap-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200"></div>
-                        </div>
-
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="block font-semibold text-slate-700 mb-1">Запитів на категорію (1-12):</label>
-                                <input id="expMaxQueriesInput" type="number" min="1" max="12" value="6" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
-                            </div>
-                            <div>
-                                <label class="block font-semibold text-slate-700 mb-1">Кількість повторів (1-5):</label>
-                                <input id="expRepeatsInput" type="number" min="1" max="5" value="1" class="w-full border border-slate-300 rounded-lg px-3 py-1.5">
-                            </div>
-                        </div>
-
-                        <div class="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
-                            <div class="flex flex-wrap items-center justify-between gap-2">
-                                <label class="font-semibold text-slate-700">Контекст для моделі:</label>
-                                <div class="flex items-center gap-1.5 text-xs">
-                                    <span class="text-slate-600">Top-K пошуку:</span>
-                                    <input id="expTopKInput" type="number" min="1" max="10" value="3" class="w-14 border border-slate-300 rounded px-2 py-0.5 bg-white text-center font-semibold">
-                                </div>
-                            </div>
-                            <div id="expContextModesCheckboxes" class="space-y-1 text-xs">
-                                <label class="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" name="expContextMode" value="gold_context" checked class="rounded text-blue-600">
-                                    <span><b>Еталонний контекст</b>: найкращий можливий випадок</span>
-                                </label>
-                                <label class="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" name="expContextMode" value="retrieved_context" class="rounded text-blue-600">
-                                    <span><b>Пошук у базі знань</b>: те, що буде в роботі</span>
-                                </label>
-                                <label class="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" name="expContextMode" value="no_context" class="rounded text-blue-600">
-                                    <span><b>Без контексту</b>: нижня межа</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="block font-semibold text-slate-700 mb-1">
-                                Модель-суддя для оцінки за рубрикою (опціонально):
-                            </label>
-                            <select id="expJudgeModelSelect" onchange="updateBatchExperimentEstimate()" class="w-full border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-xs">
-                                <option value="">Без судді (алгоритмічна оцінка)</option>
-                            </select>
-                            <label class="mt-1.5 flex items-center gap-2 cursor-pointer text-xs text-slate-600">
-                                <input type="checkbox" id="expAllowSelfJudge" class="rounded text-indigo-600">
-                                <span>Дозволити моделі оцінювати саму себе</span>
-                            </label>
-                        </div>
-
-                        <div id="expEstimateBox" class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
-                            <div class="font-semibold text-slate-800">Прогноз перед запуском</div>
-                            <div id="expEstimateContent" class="text-slate-600">Розрахунок обсягу викликів...</div>
-                        </div>
-
-                        <button onclick="startNewBatchExperiment()" id="startBatchExpBtn" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition">
-                            Запустити серію
-                        </button>
-                    </div>
-                </div>
-
-                <div class="lg:col-span-7 space-y-4">
-                    <div class="card-box p-5">
-                        <div class="flex items-center justify-between mb-2.5">
-                            <div>
-                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">Історія серій експериментів</h3>
-                                <p class="text-[11px] text-slate-500">Оберіть серію для перегляду замірів або аналітики</p>
-                            </div>
-                        </div>
-                        <div id="experimentRunsListContainer" class="space-y-2 max-h-60 overflow-y-auto text-xs"></div>
-                    </div>
-
-                    <div class="card-box p-5 space-y-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
-                            <div>
-                                <h3 class="font-bold text-slate-900 text-sm sm:text-base">
-                                    Таблиця виконаних замірів
-                                </h3>
-                                <p class="text-[11px] text-slate-500">
-                                    Натисніть на рядок, щоб відкрити деталі запиту, згенеровану відповідь і розрахунок метрик
-                                </p>
-                            </div>
-                            <div class="flex flex-wrap gap-1.5 text-xs items-center">
-                                <select id="logFilterRunSelect" onchange="onChangeLogTableRun()" class="border border-blue-400 bg-blue-50 text-blue-900 font-semibold rounded px-2 py-1">
-                                </select>
-                                <select id="logFilterModel" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
-                                    <option value="all">Усі моделі</option>
-                                </select>
-                                <select id="logFilterPrompt" onchange="loadExperimentItemsLog()" class="border border-slate-300 rounded px-2 py-1">
-                                    <option value="all">Усі промпти</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="overflow-x-auto max-h-96">
-                            <table class="w-full text-left border-collapse text-xs">
-                                <thead class="bg-slate-100 text-slate-700 sticky top-0">
-                                    <tr>
-                                        <th class="py-2 px-2">Запит</th>
-                                        <th class="py-2 px-2">Модель</th>
-                                        <th class="py-2 px-2">Промпт</th>
-                                        <th class="py-2 px-2 text-center">Якість, %</th>
-                                        <th class="py-2 px-2 text-center">Повнота фактів, %</th>
-                                        <th class="py-2 px-2 text-center">Галюц.</th>
-                                        <th class="py-2 px-2 text-center">Час, мс</th>
-                                        <th class="py-2 px-2 text-center">Токени</th>
-                                        <th class="py-2 px-2 text-center">Вартість ($/1M)</th>
-                                        <th class="py-2 px-2 text-center">Деталі</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="experimentItemsLogBody" class="divide-y divide-slate-200"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </section>
 
         <!-- ВКЛАДКА: АНАЛІТИКА -->
@@ -676,12 +674,22 @@
             </div>
 
             <div id="analyticsContentWrap" class="hidden space-y-8">
+            <nav id="resultsNav" class="sticky top-[57px] z-20 -mx-1 px-1 py-2 bg-slate-50/95 border-b border-slate-200 flex flex-wrap gap-1.5 text-sm">
+                <button data-target="results-hypotheses" onclick="resultsScrollTo('results-hypotheses')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Гіпотези</button>
+                <button data-target="results-models" onclick="resultsScrollTo('results-models')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Яку модель взяти</button>
+                <button data-target="results-domains" onclick="resultsScrollTo('results-domains')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Сфери</button>
+                <button data-target="results-context" onclick="resultsScrollTo('results-context')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Промпт і контекст</button>
+                <button data-target="results-cascade" onclick="resultsScrollTo('results-cascade')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Каскад</button>
+                <button data-target="results-reliability" onclick="resultsScrollTo('results-reliability')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Надійність</button>
+                <button data-target="results-engineer" onclick="resultsScrollTo('results-engineer')" class="results-nav-btn px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-white">Для інженерів</button>
+            </nav>
+
             <div class="card-box p-4 flex flex-wrap items-center justify-between gap-3">
                 <p id="analyticsSampleLine" class="text-sm text-slate-800"></p>
                 <span id="analyticsReliabilityBadge" class="text-xs px-2.5 py-1 rounded-lg border border-slate-300"></span>
             </div>
 
-            <section class="space-y-3">
+            <section id="results-hypotheses" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Що показують гіпотези</h2>
                     <p class="text-sm text-slate-600">Кожна гіпотеза перевіряється на зібраних даних. Висновок з'являється лише тоді, коли запитів достатньо.</p>
@@ -778,7 +786,7 @@
                     </div>
                 </details>
 
-            <section class="space-y-3">
+            <section id="results-models" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Яку модель взяти</h2>
                     <p class="text-sm text-slate-600">Рекомендація за якістю і безпекою, а нижче те саме з іншими пріоритетами.</p>
@@ -868,7 +876,7 @@
                     </div>
                 </details>
             </section>
-            <section class="space-y-3">
+            <section id="results-domains" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Чи залежить найкраща модель від сфери (H1)</h2>
                     <p class="text-sm text-slate-600">Для кожної сфери береться найкраща модель. Якщо переможці різні, універсально найкращої моделі немає.</p>
@@ -879,7 +887,7 @@
                     <div id="matrixModelDomainContainer" class="overflow-x-auto"></div>
                 </div>
             </section>
-            <section class="space-y-3">
+            <section id="results-context" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Чи важливі промпт і контекст (H2)</h2>
                     <p class="text-sm text-slate-600">Порівнюється, наскільки якість змінюється від стратегії промпту та режиму контексту, і наскільки від вибору моделі.</p>
@@ -924,7 +932,7 @@
                                 </div>
                             </div>
             </section>
-            <section class="space-y-3">
+            <section id="results-cascade" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Чи достатньо дешевої моделі (H3)</h2>
                     <p class="text-sm text-slate-600">Дешева модель відповідає першою, складні та ризикові запити передаються далі. Розрахунок виконується на вже зібраних даних.</p>
@@ -989,7 +997,7 @@
                                 </div>
                             </div>
             </section>
-            <section class="space-y-3">
+            <section id="results-reliability" class="space-y-3 scroll-mt-28">
                 <div>
                     <h2 class="font-semibold text-slate-900 text-lg">Наскільки результат надійний</h2>
                     <p class="text-sm text-slate-600">Попередження про вибірку та суддю, статистична перевірка різниць і точність рішень про передачу оператору.</p>
@@ -1034,7 +1042,7 @@
                                 </div>
                             </div>
             </section>
-            <section class="space-y-3">
+            <section id="results-engineer" class="space-y-3 scroll-mt-28">
                 <h2 class="font-semibold text-slate-900 text-lg">Для інженерів і експорту</h2>
                 <details class="card-box">
                     <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-900">Повна таблиця моделей, типи запитів, критерії рубрики</summary>

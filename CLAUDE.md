@@ -39,6 +39,8 @@
 - app/domain_datasets.py, app/seed_data.py: сферы, запросы, шаблоны промптов P1-P5. Дополнительные запросы лежат в data/proposed/balanced_domain_queries_draft.json и загружаются один раз как чернетки.
 - app/services: assistant.py (Помощник), retrieval.py (BM25 по корпусу знаний, corpus_mode kb или legacy), llm_runtime.py (клиенты и планировщик), model_discovery.py (поиск моделей и проверка каждой модели, фоновая задача с прогрессом), experiment_runner.py (серии), analytics.py, hypotheses.py (вердикты H1-H3), cascade.py, decision_support.py, kb_drafts.py (FAQ, чернетки, проверка), judge.py, evaluator.py, stats.py, export_service.py.
 - app/static: index.html, js (core, home, providers, sandbox, assistant, experiments, analytics, results, dataset, settings), собранный tailwind.css (сборка в scripts/tailwind), chart.umd.js локально.
+- Отбор запросов в серию (select_stratified_queries): до N запросов на каждую пару (сфера, категория); если запросов больше, выбор случайный, но воспроизводимый (seed); equal_domain_sample выравнивает сферы по самой малой. Точный список кодов хранится в settings_snapshot серии (selected_query_codes), возобновление использует его. Прогноз (/api/experiments/estimate) вызывает ту же функцию.
+- Реальный суточный лимит Gemini берётся из ошибки 429 (quotaValue) и сохраняется в реестре моделей с источником header.
 - scripts/audit_dataset.py: аудит запросов (покрытие фактов, баланс, повторы, запросы, копирующие ответ). tests.py: pytest, 71 тест.
 - Запуск на этой машине: python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 (run.bat ломается на кириллице в оболочке). Git есть, .env и *.db не отслеживаются.
 

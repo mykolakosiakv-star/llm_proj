@@ -1,10 +1,10 @@
 const HOME_TASKS = [
     { role: 'Співробітник підтримки', title: 'Відповісти на запит клієнта', text: 'Знайти відповідь у базі знань і дізнатися, чи потрібен оператор.', tab: 'sandbox' },
-    { role: 'Керівник підтримки', title: 'Обрати модель для впровадження', text: 'Рекомендація з урахуванням якості, ціни та безпеки.', tab: 'analytics' },
+    { role: 'Керівник підтримки', title: 'Обрати модель для впровадження', text: 'Рекомендація з урахуванням якості, ціни та безпеки.', tab: 'analytics#results-models' },
     { role: 'Дослідник', title: 'Перевірити гіпотези на даних', text: 'Запустити серію запитів по сферах і побачити, що вона підтверджує.', tab: 'experiments' },
     { role: 'Інженер впровадження', title: 'Додати власну модель', text: 'Підключити будь-який сервіс із OpenAI-сумісним API та перевірити його.', tab: 'settings' },
     { role: 'Інженер впровадження', title: 'Додати сферу або запити', text: 'Завантажити FAQ або типові запити та перевірити, як модель на них відповідає.', tab: 'dataset' },
-    { role: 'Студент або викладач', title: 'Відтворити результати й експортувати їх', text: 'Методика, таблиці та вибірка для ручної перевірки.', tab: 'analytics' },
+    { role: 'Студент або викладач', title: 'Відтворити результати й експортувати їх', text: 'Методика, таблиці та вибірка для ручної перевірки.', tab: 'analytics#results-engineer' },
 ];
 
 const HOME_TABS = [
@@ -24,6 +24,7 @@ const HOME_HYPOTHESIS_INFO = {
         benefit: 'Якщо підтверджується, рекомендацію «яку модель брати» треба давати окремо для вашої сфери. Якщо ні, достатньо однієї моделі для всіх.',
         preset: 'h1',
         see: 'Результати, розділ «Чи залежить найкраща модель від сфери»',
+        seeTarget: 'analytics#results-domains',
     },
     H2: {
         question: 'Що дає більше: кращий промпт і база знань чи дорожча модель?',
@@ -32,6 +33,7 @@ const HOME_HYPOTHESIS_INFO = {
         benefit: 'Якщо підтверджується, дешевше покращити інструкцію або базу знань, ніж переходити на дорожчу модель.',
         preset: 'h2',
         see: 'Результати, розділ «Чи важливі промпт і контекст»',
+        seeTarget: 'analytics#results-context',
     },
     H3: {
         question: 'Чи можна більшість типових запитів віддати дешевій моделі без втрати безпеки?',
@@ -39,9 +41,17 @@ const HOME_HYPOTHESIS_INFO = {
         proof: c => `Дешевша модель поступається лідеру не більш ніж на ${c.quality_tolerance_pts} п.п. якості, не пропускає більше обов'язкових передач оператору і коштує менше.`,
         benefit: 'Якщо підтверджується, прості запити можна віддати дешевій моделі, а складні й ризикові передавати сильній моделі або оператору.',
         preset: 'h3',
-        see: 'Результати, розділи «Яку модель взяти» і «Чи достатньо дешевої моделі»',
+        see: 'Результати, розділ «Чи достатньо дешевої моделі»',
+        seeTarget: 'analytics#results-cascade',
     },
 };
+
+// Ціль виду «вкладка» або «вкладка#розділ»: для «Результатів» відкривається потрібний розділ сторінки
+function homeGo(target) {
+    const [tab, section] = target.split('#');
+    if (tab === 'analytics' && section) openResultsSection(section);
+    else switchTab(tab);
+}
 
 function homeScrollTo(id) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -81,7 +91,7 @@ function homeHypothesisHtml(id, verdict, criteria) {
         ${status}
         <div class="flex flex-wrap items-center gap-3 mt-4 text-sm">
             <button onclick="homeOpenPreset('experiments', '${info.preset}')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Налаштувати серію для ${id}</button>
-            <button onclick="switchTab('analytics')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Де дивитися: ${escapeHtml(info.see)}</button>
+            <button onclick="homeGo('${info.seeTarget}')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">Де дивитися: ${escapeHtml(info.see)}</button>
         </div>
     </div>`;
 }
@@ -96,7 +106,7 @@ function renderHomeTasks() {
     const box = document.getElementById('homeTasks');
     if (!box) return;
     box.innerHTML = HOME_TASKS.map(task => `
-        <button onclick="switchTab('${task.tab}')" class="card-box p-4 text-left hover:border-slate-400 transition">
+        <button onclick="homeGo('${task.tab}')" class="card-box p-4 text-left hover:border-slate-400 transition">
             <div class="text-xs text-slate-500">${escapeHtml(task.role)}</div>
             <div class="text-sm font-semibold text-slate-900 mt-1">${escapeHtml(task.title)}</div>
             <p class="text-sm text-slate-600 mt-1">${escapeHtml(task.text)}</p>
@@ -135,7 +145,7 @@ function homeStepHtml(number, done, title, text, tab) {
             <div class="text-sm font-semibold text-slate-900">${number}. ${escapeHtml(title)} ${mark}</div>
             <p class="text-sm text-slate-600 mt-1">${escapeHtml(text)}</p>
         </div>
-        <button onclick="switchTab('${tab}')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-sm">Відкрити</button>
+        <button onclick="homeGo('${tab}')" class="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-sm">Відкрити</button>
     </li>`;
 }
 
@@ -149,7 +159,7 @@ function renderHomeSteps(kbItems, hypothesesAvailable) {
         homeStepHtml(1, working > 0, 'Підключіть моделі', 'Вкажіть ключі провайдерів або додайте власну модель, натисніть «Оновити статуси» й увімкніть моделі, що відповідають.', 'settings'),
         homeStepHtml(2, kbReady, 'Підготуйте дані', 'Перегляньте тестові запити, затвердіть чернетки. Для висновків потрібно не менше 30 перевірених запитів у кожній сфері. За потреби розширте базу дистракторами.', 'dataset'),
         homeStepHtml(3, runs > 0, 'Запустіть серію', 'Оберіть гіпотезу, перевірте прогноз вартості та часу й запустіть. Серія працює у фоні.', 'experiments'),
-        homeStepHtml(4, hypothesesAvailable, 'Прочитайте результати', 'Вердикти за гіпотезами, рекомендація моделі й розрахунок каскаду.', 'analytics'),
+        homeStepHtml(4, hypothesesAvailable, 'Прочитайте результати', 'Вердикти за гіпотезами, рекомендація моделі й розрахунок каскаду.', 'analytics#results-hypotheses'),
         homeStepHtml(5, null, 'Користуйтеся помічником', 'Відповідайте на запити клієнтів із моделлю, яку рекомендують результати.', 'sandbox'),
     ].join('');
 }

@@ -109,3 +109,46 @@ function renderResultsOverview(data) {
     renderDomainSection(data);
     renderContextSection(data);
 }
+
+
+const RESULTS_SECTION_IDS = ['results-hypotheses', 'results-models', 'results-domains', 'results-context', 'results-cascade', 'results-reliability', 'results-engineer'];
+
+function resultsScrollTo(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+    // Згорнуті блоки розділу розкриваються, щоб користувач одразу бачив, куди його привели
+    if (sectionId === 'results-engineer') section.querySelectorAll('details').forEach(d => { d.open = true; });
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Перехід з інших вкладок: відкриває «Результати» і прокручує до потрібного розділу
+function openResultsSection(sectionId) {
+    switchTab('analytics');
+    const attempt = tries => {
+        const wrap = document.getElementById('analyticsContentWrap');
+        if (wrap && !wrap.classList.contains('hidden')) {
+            resultsScrollTo(sectionId);
+        } else if (tries > 0) {
+            setTimeout(() => attempt(tries - 1), 300);
+        }
+    };
+    attempt(10);
+}
+
+function updateResultsNavHighlight() {
+    const tab = document.getElementById('tab-analytics');
+    if (!tab || tab.classList.contains('hidden')) return;
+    let current = RESULTS_SECTION_IDS[0];
+    RESULTS_SECTION_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top <= 140) current = id;
+    });
+    document.querySelectorAll('#resultsNav .results-nav-btn').forEach(btn => {
+        const active = btn.dataset.target === current;
+        btn.classList.toggle('bg-white', active);
+        btn.classList.toggle('text-blue-700', active);
+        btn.classList.toggle('border-blue-400', active);
+    });
+}
+
+window.addEventListener('scroll', updateResultsNavHighlight, { passive: true });

@@ -1,14 +1,87 @@
-function onExpDomainSelectChange() {
-    const domSel = document.getElementById('expDomainSelect');
-    const descEl = document.getElementById('expDomainRiskDesc');
-    if (!domSel || !descEl) return;
-    const domId = domSel.value || 'fintech';
-    const domInfo = APP_STATE.metadata?.domains?.[domId];
-    if (domInfo) {
-        descEl.textContent = `${domInfo.description_uk} ${domInfo.risk_profile_uk || ''}`;
-    } else {
-        descEl.textContent = 'Комплексне тестування одночасно за всіма 4 предметними сферами служби підтримки.';
-    }
+function getSelectedExpDomains() {
+    return Array.from(document.querySelectorAll('input[name="expDomain"]:checked')).map(el => el.value);
+}
+
+function renderExpDomains() {
+    const box = document.getElementById('expDomainsBox');
+    if (!box) return;
+    const previous = new Set(getSelectedExpDomains());
+    const firstRender = box.children.length === 0;
+    const queries = APP_STATE.queries || [];
+    box.innerHTML = Object.values(APP_STATE.metadata?.domains || {}).map(d => {
+        const reviewed = queries.filter(q => (q.domain || 'fintech') === d.id && q.review_status === 'reviewed').length;
+        const drafts = queries.filter(q => (q.domain || 'fintech') === d.id && q.review_status === 'draft').length;
+        const checked = firstRender || previous.has(d.id);
+        return `<label class="flex items-start gap-2 p-2.5 border border-slate-200 rounded-lg cursor-pointer hover:border-slate-400">
+            <input type="checkbox" name="expDomain" value="${escapeHtml(d.id)}" ${checked ? 'checked' : ''} onchange="updateBatchExperimentEstimate()" class="mt-0.5 rounded text-blue-600">
+            <span>
+                <span class="block text-sm font-medium text-slate-900">${escapeHtml(d.name_uk)}</span>
+                <span class="block text-xs text-slate-500">перевірених запитів ${reviewed}${drafts ? `, чернеток ${drafts} (не беруться)` : ''}</span>
+            </span></label>`;
+    }).join('');
+}
+
+function toggleAllExpDomains(checked) {
+    document.querySelectorAll('input[name="expDomain"]').forEach(el => { el.checked = checked; });
+    updateBatchExperimentEstimate();
+}
+
+function selectedExpModels() {
+    const ids = new Set(Array.from(document.querySelectorAll('input[name="expModel"]:checked')).map(el => el.value));
+    return (APP_STATE.metadata?.models || []).filter(m => ids.has(m.id));
+}
+
+function onExpModelsChange() {
+    renderExpJudgeList();
+    updateBatchExperimentEstimate();
+}
+
+function pickExpJudge(modelId) {
+    document.getElementById('expJudgeModelSelect').value = modelId;
+    updateBatchExperimentEstimate();
+}
+
+// Судді показуються так само, як моделі для тестування, з родиною та незалежністю щодо обраних моделей
+function renderExpJudgeList() {
+    const box = document.getElementById('expJudgeList');
+    const hidden = document.getElementById('expJudgeModelSelect');
+    if (!box || !hidden) return;
+    const tested = selectedExpModels();
+    const allowSelf = Boolean(document.getElementById('expAllowSelfJudge')?.checked);
+    const family = m => m.family || m.provider;
+    const candidates = getEnabledModelsList();
+    if (hidden.value && !candidates.some(m => m.id === hidden.value)) hidden.value = '';
+
+    const row = (value, title, subtitle, badge, note, noteClass) => `
+        <label class="flex items-start justify-between gap-2 cursor-pointer p-2 rounded-lg border ${hidden.value === value ? 'border-blue-400 bg-blue-50/40' : 'border-slate-200'} hover:border-slate-400">
+            <div class="flex items-start gap-2.5">
+                <input type="radio" name="expJudge" value="${escapeHtml(value)}" ${hidden.value === value ? 'checked' : ''} onchange="pickExpJudge(this.value); renderExpJudgeList()" class="mt-1 cursor-pointer">
+                <div>
+                    <div class="text-sm font-medium text-slate-900">${title}</div>
+                    <div class="text-xs text-slate-500">${subtitle}</div>
+                    ${note ? `<div class="text-xs mt-0.5 ${noteClass}">${note}</div>` : ''}
+                </div>
+            </div>${badge}
+        </label>`;
+
+    const rows = [row('', 'Без судді', 'Лише оцінка за фактами та схожістю до еталона, без додаткових викликів.', '', '', '')];
+    candidates.forEach(m => {
+        const sameFamily = tested.filter(t => family(t) === family(m) && t.id !== m.id);
+        const self = tested.some(t => t.id === m.id);
+        let note = 'Незалежний для всіх обраних моделей.';
+        let cls = 'text-emerald-800';
+        if (!tested.length) { note = ''; }
+        else if (sameFamily.length || self) {
+            const names = [...(self ? [m.name] : []), ...sameFamily.map(t => t.name)].join(', ');
+            note = allowSelf ? `Оцінюватиме й моделі своєї родини (${names}), це буде позначено як самооцінювання.` : `Не оцінюватиме моделі своєї родини: ${names}. Їхні відповіді лишаться без оцінки суддею.`;
+            cls = allowSelf ? 'text-slate-600' : 'text-amber-800';
+        }
+        const working = m.status_code === 'ok' ? '' : ' Зараз не відповідає, суддя може не спрацювати.';
+        rows.push(row(m.id, `${escapeHtml(m.name)} <span class="text-xs font-mono font-normal text-slate-400">${escapeHtml(m.id)}</span>`,
+            `Родина: ${escapeHtml(family(m))}. Ціна: ${m.price_known ? `$${m.cost_per_1m_input_usd}/1M` : 'не задана'}.`,
+            getStatusBadgeHtml(m.status_code, m.status_label), escapeHtml(note + working), working && !note ? 'text-amber-800' : cls));
+    });
+    box.innerHTML = rows.join('');
 }
 
 function populateControls() {
@@ -16,6 +89,7 @@ function populateControls() {
     if (!meta) return;
 
     const enabledModels = getEnabledModelsList();
+    renderExpDomains();
 
     // Вибір типового запиту у пісочниці з фільтром за сферою
     populateSandboxQueryPresets();
@@ -82,7 +156,7 @@ function populateControls() {
                 return `
                     <label class="flex items-center justify-between gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-300 bg-white/70 transition">
                         <div class="flex items-center gap-2.5">
-                            <input type="checkbox" name="expModel" value="${m.id}" onchange="updateBatchExperimentEstimate()" ${isChecked ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer">
+                            <input type="checkbox" name="expModel" value="${m.id}" onchange="onExpModelsChange()" ${isChecked ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer">
                             <div>
                                 <div class="font-semibold text-slate-800 text-xs flex items-center gap-1.5">
                                     <span>${escapeHtml(m.name)}</span>
@@ -99,11 +173,7 @@ function populateControls() {
     }
 
     // Селектор незалежного LLM-судді для серійного експерименту (тільки увімкнені моделі)
-    const judgeSel = document.getElementById('expJudgeModelSelect');
-    if (judgeSel) {
-        const prevJudge = judgeSel.value || '';
-        judgeSel.innerHTML = buildJudgeSelectOptionsHtml(enabledModels, prevJudge, true);
-    }
+    renderExpJudgeList();
 
     // Селектор судді у модальному вікні дооцінювання
     const judgeRunSel = document.getElementById('judgeRunModelSelect');
@@ -194,7 +264,8 @@ function applyExperimentPreset(code) {
     const preset = EXPERIMENT_PRESETS[code];
     if (!preset) return;
     document.getElementById('expTitleInput').value = preset.title;
-    document.getElementById('expDomainSelect').value = preset.domain || largestDomainCode();
+    const chosenDomains = preset.domain === 'all' ? Object.keys(APP_STATE.metadata?.domains || {}) : [preset.domain || largestDomainCode()];
+    document.querySelectorAll('input[name="expDomain"]').forEach(el => { el.checked = chosenDomains.includes(el.value); });
     document.getElementById('expEqualDomainSample').checked = true;
     document.getElementById('expMaxQueriesInput').value = 12;
     document.getElementById('expRepeatsInput').value = 1;
@@ -209,14 +280,14 @@ function applyExperimentPreset(code) {
     const picked = new Set(preferred.slice(0, preset.models).map(el => el.value));
     document.querySelectorAll('input[name="expModel"]').forEach(el => { el.checked = picked.has(el.value); });
     document.getElementById('expPresetNote').textContent = preset.note;
-    onExpDomainSelectChange();
-    updateBatchExperimentEstimate();
+    onExpModelsChange();
 }
 
 function toggleAllExpModelsCheckboxes(checked) {
     document.querySelectorAll('input[name="expModel"]').forEach(cb => {
         cb.checked = checked;
     });
+    onExpModelsChange();
 }
 
 // ============================================================================
@@ -225,7 +296,7 @@ function toggleAllExpModelsCheckboxes(checked) {
 
 async function startNewBatchExperiment() {
     const title = document.getElementById('expTitleInput').value.trim() || 'Серія експериментів';
-    const domain = document.getElementById('expDomainSelect')?.value || 'fintech';
+    const domains = getSelectedExpDomains();
     const modelIds = Array.from(document.querySelectorAll('input[name="expModel"]:checked')).map(el => el.value);
     const promptCodes = Array.from(document.querySelectorAll('input[name="expPrompt"]:checked')).map(el => el.value);
     const categories = Array.from(document.querySelectorAll('input[name="expCategory"]:checked')).map(el => el.value);
@@ -240,8 +311,8 @@ async function startNewBatchExperiment() {
     const errBox = document.getElementById('expErrorBox');
     errBox.classList.add('hidden');
 
-    if (!modelIds.length || !promptCodes.length || !categories.length) {
-        errBox.textContent = 'Оберіть щонайменше одну модель, один промпт та одну категорію запитів.';
+    if (!domains.length || !modelIds.length || !promptCodes.length || !categories.length) {
+        errBox.textContent = 'Оберіть щонайменше одну сферу, модель, промпт і категорію запитів.';
         errBox.classList.remove('hidden');
         return;
     }
@@ -258,8 +329,9 @@ async function startNewBatchExperiment() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 title,
-                description: `Сфера: ${domain}, Режими контексту: ${effectiveModes.join(',')}, Моделей: ${modelIds.length}, Промптів: ${promptCodes.length}`,
-                domain,
+                description: `Сфери: ${domains.join(', ')}. Режими контексту: ${effectiveModes.join(', ')}. Моделей: ${modelIds.length}, промптів: ${promptCodes.length}`,
+                domain: domains[0],
+                domains,
                 equal_domain_sample: equalDomainSample,
                 context_mode: effectiveModes[0],
                 context_modes: effectiveModes,
