@@ -147,8 +147,10 @@ function populateControls() {
                 existingInputs.filter(el => el.checked).map(el => el.value)
             );
 
-            expModelsBox.innerHTML = enabledModels.map(m => {
-                const isChecked = isFirstRender ? true : currentlyChecked.has(m.id);
+            // Моделі без доступу (нульовий баланс, неправильний ключ) йдуть в кінець і за замовчуванням не обрані
+            const sortedModels = [...enabledModels].sort((a, b) => isModelBlocked(a) - isModelBlocked(b));
+            expModelsBox.innerHTML = sortedModels.map(m => {
+                const isChecked = isFirstRender ? !isModelBlocked(m) : currentlyChecked.has(m.id);
                 const statusBadge = getStatusBadgeHtml(m.status_code, m.status_label);
                 const inCtx = formatTokenNum(m.context_in || m.input_limit);
                 const pIn = (m.price_known && m.cost_per_1m_input_usd != null) ? `$${m.cost_per_1m_input_usd}/1M` : 'ціна не задана';
@@ -286,6 +288,14 @@ function applyExperimentPreset(code) {
 function toggleAllExpModelsCheckboxes(checked) {
     document.querySelectorAll('input[name="expModel"]').forEach(cb => {
         cb.checked = checked;
+    });
+    onExpModelsChange();
+}
+
+function selectWorkingExpModels() {
+    const byId = new Map((APP_STATE.metadata?.models || []).map(m => [m.id, m]));
+    document.querySelectorAll('input[name="expModel"]').forEach(cb => {
+        cb.checked = !isModelBlocked(byId.get(cb.value) || {});
     });
     onExpModelsChange();
 }

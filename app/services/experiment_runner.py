@@ -139,6 +139,29 @@ async def _generate_with_contract_retry(
     return combined_out, parsed_retry
 
 
+def _is_model_unusable_error(exc: Exception) -> bool:
+    """Ошибка означает, что модель в этой серии больше не ответит: лимит, нет ключа или отказ в доступе."""
+    text = str(exc)
+    return (
+        isinstance(exc, DailyQuotaExceededError)
+        or "не вказано" in text
+        or "401" in text
+        or "вичерпано добовий" in text.lower()
+    )
+
+
+def _quota_fields(quota_skipped: Dict[str, str]) -> Dict[str, Any]:
+    """Поля summary серии, по которым интерфейс показывает, какие модели остановил суточный лимит."""
+    if not quota_skipped:
+        return {}
+    return {
+        "quota_paused": True,
+        "quota_models": sorted(quota_skipped),
+        "quota_message": "; ".join(quota_skipped.values())[:400],
+        "resume_after": "після оновлення добової квоти (Gemini: опівночі за тихоокеанським часом, інші: 00:00 UTC)",
+    }
+
+
 def _insert_evaluation_record(
     cur: Any,
     run_id: int,
@@ -832,6 +855,7 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
     completed = 0
     errors_count = 0
     disabled_models = set()
+    quota_skipped: Dict[str, str] = {}
     last_fatal_error = ""
     early_ended = False
     active_judge_model = judge_model_id or str(settings.get("judge_model", "gemini-2.5-flash"))
@@ -1144,16 +1168,13 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
                                     f"Помилка на запиті {q['code']} ({m_id}, {p_code}, {ctx_mode}, повтор {rep}): {err_text}",
                                     level="ERROR",
                                 )
-                                if (
-                                    isinstance(item_exc, DailyQuotaExceededError)
-                                    or "не вказано" in err_text
-                                    or "401" in err_text
-                                    or "вичерпано добовий" in err_text.lower()
-                                ):
+                                if _is_model_unusable_error(item_exc):
                                     disabled_models.add(m_id)
+                                    if isinstance(item_exc, DailyQuotaExceededError):
+                                        quota_skipped[m_id] = err_text[:240]
                                     log_event(
                                         "ЕКСПЕРИМЕНТ [ПРОПУСК МОДЕЛІ]",
-                                        f"Модель «{model_cfg['name']}» ({m_id}) виключено з поточної серії через ліміт квоти або відсутність ключа.",
+                                        f"Модель «{model_cfg['name']}» ({m_id}) виключено з поточної серії через ліміт квоти або відсутність ключа. Решта моделей продовжують роботу.",
                                         level="WARN",
                                     )
                                     if len(disabled_models) >= len(model_ids):
@@ -1170,10 +1191,12 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
             final_status = "incomplete"
         else:
             final_status = "completed"
+        if quota_skipped and final_status in ("failed", "incomplete"):
+            final_status = "paused_quota"
 
         cur.execute(
-            "UPDATE experiment_runs SET completed_items = ?, status = ? WHERE id = ?",
-            (completed, final_status, run_id),
+            "UPDATE experiment_runs SET completed_items = ?, status = ?, summary_json = ? WHERE id = ?",
+            (completed, final_status, json.dumps(_quota_fields(quota_skipped), ensure_ascii=False), run_id),
         )
         conn.commit()
     finally:
@@ -1188,7 +1211,7 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
     conn2 = get_connection()
     conn2.execute(
         "UPDATE experiment_runs SET summary_json = ? WHERE id = ?",
-        (json.dumps(analytics.get("overall", {}), ensure_ascii=False), run_id),
+        (json.dumps({**analytics.get("overall", {}), **_quota_fields(quota_skipped)}, ensure_ascii=False), run_id),
     )
     conn2.commit()
     conn2.close()
@@ -1400,6 +1423,7 @@ async def resume_batch_experiment(
     )
 
     disabled_models = set()
+    quota_skipped: Dict[str, str] = {}
     early_ended = False
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1603,9 +1627,23 @@ async def resume_batch_experiment(
                                 await asyncio.sleep(1.2)
                             except Exception as item_exc:
                                 log_event("ЕКСПЕРИМЕНТ [ПОМИЛКА]", f"Помилка довиконання {q['code']} ({m_id}, {p_code}): {item_exc}", level="ERROR")
+                                if _is_model_unusable_error(item_exc):
+                                    disabled_models.add(m_id)
+                                    if isinstance(item_exc, DailyQuotaExceededError):
+                                        quota_skipped[m_id] = str(item_exc)[:240]
+                                    log_event(
+                                        "ЕКСПЕРИМЕНТ [ПРОПУСК МОДЕЛІ]",
+                                        f"Модель {m_id} виключено з продовження через ліміт квоти або ключ. Решта моделей продовжують роботу.",
+                                        level="WARN",
+                                    )
 
         final_status = "completed" if completed >= total_items else "incomplete"
-        cur.execute("UPDATE experiment_runs SET completed_items = ?, status = ? WHERE id = ?", (completed, final_status, run_id))
+        if quota_skipped and final_status == "incomplete":
+            final_status = "paused_quota"
+        cur.execute(
+            "UPDATE experiment_runs SET completed_items = ?, status = ?, summary_json = ? WHERE id = ?",
+            (completed, final_status, json.dumps(_quota_fields(quota_skipped), ensure_ascii=False), run_id),
+        )
         conn.commit()
     finally:
         clear_active_prompt()
@@ -1615,7 +1653,7 @@ async def resume_batch_experiment(
     conn2 = get_connection()
     conn2.execute(
         "UPDATE experiment_runs SET summary_json = ? WHERE id = ?",
-        (json.dumps(analytics.get("overall", {}), ensure_ascii=False), run_id),
+        (json.dumps({**analytics.get("overall", {}), **_quota_fields(quota_skipped)}, ensure_ascii=False), run_id),
     )
     conn2.commit()
     conn2.close()

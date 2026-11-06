@@ -329,13 +329,22 @@ function estimateQuotaHtml(res) {
     const rows = (res.models || []).map(m => {
         const remaining = m.remaining_rpd === null || m.remaining_rpd === undefined ? 'ліміт невідомий' : `залишок ${m.remaining_rpd} з ${m.rpd}`;
         const source = m.rpd ? ` (${LIMIT_SOURCE_LABELS[m.rpd_source] || m.rpd_source})` : '';
-        const bad = m.quota_exceeded || m.exhausted_now;
-        return `<tr class="border-b border-slate-100"><td class="py-1 pr-2">${escapeHtml(m.name)}</td><td class="py-1 pr-2">${m.calls}</td>
-            <td class="py-1 ${bad ? 'text-amber-800' : 'text-slate-600'}">${m.exhausted_now ? 'ліміт на сьогодні вичерпано' : remaining + source}</td></tr>`;
+        const bad = m.quota_exceeded || m.exhausted_now || m.blocked_status;
+        const limitText = m.blocked_status ? 'немає доступу' : (m.exhausted_now ? 'ліміт на сьогодні вичерпано' : remaining + source);
+        const today = m.blocked_status ? '0' : `${m.runnable_today} з ${m.calls}`;
+        return `<tr class="border-b border-slate-100"><td class="py-1 pr-2">${escapeHtml(m.name)}</td><td class="py-1 pr-2">${today}</td>
+            <td class="py-1 ${bad ? 'text-amber-800' : 'text-slate-600'}">${limitText}</td></tr>`;
     }).join('');
+    const total = res.total_generation_calls || 0;
+    const partial = res.runnable_calls_today < total;
+    const days = res.days_needed > 1 ? ` Повна серія займе близько ${res.days_needed} діб: щодня вона продовжується з того ж місця.` : '';
+    const summary = partial
+        ? `<p class="text-xs text-amber-800 mt-2">Сьогодні вийде виконати ${res.runnable_calls_today} з ${total} відповідей. Модель, у якої закінчився ліміт, серія пропускає, решта працюють далі, а недоробку можна продовжити пізніше.${escapeHtml(days)}</p>`
+        : '';
     return `<div>
-        <div class="text-xs font-medium text-slate-700 mb-1">Добові ліміти моделей</div>
-        <table class="w-full text-xs text-left"><thead class="text-slate-500"><tr><th class="py-1 pr-2 font-medium">Модель</th><th class="py-1 pr-2 font-medium">Викликів</th><th class="py-1 font-medium">Ліміт</th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="text-xs font-medium text-slate-700 mb-1">Що вийде виконати сьогодні</div>
+        <table class="w-full text-xs text-left"><thead class="text-slate-500"><tr><th class="py-1 pr-2 font-medium">Модель</th><th class="py-1 pr-2 font-medium">Сьогодні з потрібних</th><th class="py-1 font-medium">Ліміт</th></tr></thead><tbody>${rows}</tbody></table>
+        ${summary}
         ${res.quota_warnings?.length ? `<p class="text-xs text-amber-800 mt-1">${res.quota_warnings.map(escapeHtml).join('. ')}.</p>` : ''}
     </div>`;
 }

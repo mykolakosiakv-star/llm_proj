@@ -563,35 +563,53 @@ async function toggleProviderRoute(providerId, targetRoute) {
     const meta = APP_STATE.metadata;
     if (!meta || !meta.models) return;
 
+    const affected = meta.models.filter(m => m.provider === providerId && m.can_openrouter);
     const routes = { ...(meta.settings?.model_routes || {}) };
-    meta.models.filter(m => m.provider === providerId && m.can_openrouter).forEach(m => {
+    affected.forEach(m => {
         routes[m.id] = targetRoute;
     });
 
     try {
-        await fetch('/api/settings', {
+        const resp = await fetch('/api/settings', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model_routes: routes })
         });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     } catch (e) {
-        console.error('Помилка оновлення маршрутів провайдера:', e);
+        setProbeBanner(`Не вдалося змінити маршрут: ${e.message || e}`, true);
         return;
     }
-    // Статус береться з реального запиту за обраним маршрутом, а не вгадується на стороні інтерфейсу
-    await probeApiLimits({ silent: false });
+    // Перемикач реагує одразу; повна перевірка йде у фоні, бо може тривати хвилину
+    affected.forEach(m => {
+        m.route = targetRoute === 'openrouter' ? 'openrouter' : 'direct';
+    });
+    if (meta.settings) meta.settings.model_routes = routes;
+    renderProviderModalListContent(providerId);
+    probeApiLimits({ silent: false });
 }
 
 async function quickSelectSettingsModels(mode) {
     const meta = APP_STATE.metadata;
     if (!meta || !meta.models) return;
 
+    const works = m => m.status_code === 'ok';
+    const profiles = {
+        all: m => !m.is_dynamic,
+        working: m => works(m) && !m.is_dynamic,
+        free: m => works(m) && m.is_free_tier,
+        paid: m => works(m) && !m.is_free_tier,
+        local: m => m.provider === 'ollama',
+        custom: m => m.is_custom,
+    };
+    const pick = profiles[mode];
+    if (!pick) return;
+    if (!meta.models.some(pick)) {
+        setProbeBanner('У цьому наборі зараз немає жодної моделі. Спочатку оновіть статуси або додайте модель.', true);
+        return;
+    }
     meta.models.forEach(m => {
-        if (mode === 'all') {
-            m.enabled = !m.is_dynamic;
-        } else if (mode === 'working') {
-            m.enabled = m.status_code === 'ok' && !m.is_dynamic;
-        }
+        m.enabled = pick(m);
     });
 
     const enabled_models = meta.models.filter(x => x.enabled).map(x => x.id);

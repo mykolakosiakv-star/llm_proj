@@ -117,6 +117,7 @@ from app.services.model_discovery import (
     get_models_status_snapshot,
     get_status_label_uk,
     test_custom_model_connection,
+    BLOCKING_MODEL_STATUSES,
 )
 
 
@@ -1363,6 +1364,7 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
     has_unknown_price = False
     quota_warnings = []
     est_seconds_total = 0.0
+    runnable_total = 0
 
     for m_id in model_ids:
         cfg = get_model_config(m_id)
@@ -1387,7 +1389,16 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
         model_status = statuses.get(m_id) or {}
         exhausted_now = model_status.get("status") == "daily_quota" and _is_recent(model_status.get("checked_at"), hours=6)
         quota_exceeded = bool(remaining_rpd is not None and calls_per_model > remaining_rpd) or exhausted_now
-        if exhausted_now:
+        blocked_status = model_status.get("status") if model_status.get("status") in BLOCKING_MODEL_STATUSES else None
+        if blocked_status or exhausted_now:
+            runnable_today = 0
+        else:
+            runnable_today = calls_per_model if remaining_rpd is None else min(calls_per_model, remaining_rpd)
+        runnable_total += runnable_today
+        days_needed = None if blocked_status else (max(1, -(-calls_per_model // int(rpd))) if rpd else 1)
+        if blocked_status:
+            quota_warnings.append(f"{cfg.get('name', m_id)}: {get_status_label_uk(blocked_status).lower()}, модель не відповість")
+        elif exhausted_now:
             quota_warnings.append(f"{cfg.get('name', m_id)}: добовий ліміт провайдера вже вичерпано, відповіді не буде до оновлення квоти")
         elif quota_exceeded:
             quota_warnings.append(
@@ -1415,6 +1426,9 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
                 "rpd_source": rpd_source,
                 "exhausted_now": exhausted_now,
                 "quota_exceeded": quota_exceeded,
+                "blocked_status": blocked_status,
+                "runnable_today": runnable_today,
+                "days_needed": days_needed,
             }
         )
 
@@ -1464,6 +1478,8 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
         "est_duration_sec": int(round(est_seconds_total)),
         "quota_sufficient": len(quota_warnings) == 0,
         "quota_warnings": quota_warnings,
+        "runnable_calls_today": runnable_total,
+        "days_needed": max([m["days_needed"] or 1 for m in models_breakdown] or [1]),
         "models": models_breakdown,
         "judge": judge_breakdown,
     }

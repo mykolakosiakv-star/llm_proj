@@ -729,13 +729,13 @@ def test_stage2_scheduler_backoff_retry_after_and_paused_quota():
 
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT status, summary_json FROM experiment_runs WHERE id = ?", (temp_run_id,))
+        cur.execute("SELECT status FROM experiment_runs WHERE id = ?", (temp_run_id,))
         row = dict(cur.fetchone())
         conn.close()
-        assert row["status"] == "paused_quota"
-        summary = json.loads(row["summary_json"] or "{}")
-        assert summary.get("quota_paused") is True
-        assert summary.get("quota_model_id") == test_model
+        # Вичерпання ліміту однієї моделі не зупиняє серію: модель пропускає раннер, решта працюють
+        assert row["status"] == "running"
+        from app.database import fetch_all_model_statuses
+        assert fetch_all_model_statuses().get(test_model, {}).get("status") == "daily_quota"
     finally:
         conn = get_connection()
         cur = conn.cursor()
@@ -1943,3 +1943,34 @@ def test_quiet_polling_filter_hides_only_successful_polling_lines():
     assert flt.filter(record('127.0.0.1:1 - "GET /api/logs?since_id=3 HTTP/1.1" 500 Internal Server Error')) is True
     assert flt.filter(record('127.0.0.1:1 - "POST /api/models/status/refresh HTTP/1.1" 200 OK')) is True
     assert flt.filter(record('127.0.0.1:1 - "POST /api/assistant/ask HTTP/1.1" 200 OK')) is True
+
+
+def test_estimate_shows_what_can_run_today_and_flags_blocked_models():
+    from app.database import upsert_model_status
+    client = TestClient(app)
+    body = {"domain": "fintech", "model_ids": ["gemini-3.1-flash-lite", "gpt-4o-mini"], "prompt_codes": ["P3"],
+            "categories": ["informational"], "max_queries_per_category": 2, "repeats": 1, "context_modes": ["no_context"]}
+    upsert_model_status(model_key="gpt-4o-mini", status="no_credit", http_code=402, latency_ms=None, message="no balance")
+    res = client.post("/api/experiments/estimate", json=body).json()
+    blocked = next(m for m in res["models"] if m["model_id"] == "gpt-4o-mini")
+    assert blocked["blocked_status"] == "no_credit" and blocked["runnable_today"] == 0
+    assert any("не відповість" in w for w in res["quota_warnings"])
+    assert res["runnable_calls_today"] <= res["total_generation_calls"] - blocked["calls"]
+    upsert_model_status(model_key="gpt-4o-mini", status="unchecked", http_code=None, latency_ms=None, message="")
+
+
+def test_series_skips_only_the_exhausted_model_and_keeps_quota_summary():
+    from app.services.experiment_runner import _is_model_unusable_error, _quota_fields
+    from app.services.llm_runtime import DailyQuotaExceededError
+    assert _is_model_unusable_error(DailyQuotaExceededError("limit"))
+    assert _is_model_unusable_error(RuntimeError("HTTP 401 Unauthorized"))
+    assert not _is_model_unusable_error(RuntimeError("timeout"))
+    assert _quota_fields({}) == {}
+    fields = _quota_fields({"gemini-3.1-flash-lite": "limit"})
+    assert fields["quota_models"] == ["gemini-3.1-flash-lite"] and fields["quota_paused"] is True
+
+
+def test_models_metadata_marks_free_tier_and_local_models():
+    models = TestClient(app).get("/api/metadata").json()["models"]
+    assert all("is_free_tier" in m for m in models)
+    assert any(m["is_free_tier"] for m in models if m["provider"] == "gemini")

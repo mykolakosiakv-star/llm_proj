@@ -351,8 +351,10 @@ function getRunStatusBadgeHtml(run) {
     if (status === 'completed') {
         badges.push(`<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">Завершено (${run.completed_items}/${run.total_items})</span>`);
     } else if (status === 'paused_quota') {
+        const models = (run.summary?.quota_models || []).join(', ');
+        const modelsNote = models ? `, без: ${models}` : '';
         const resumeNote = run.summary?.resume_after ? ` (відновлення: ${run.summary.resume_after})` : '';
-        badges.push(`<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-400">Пауза: денна квота (${run.completed_items}/${run.total_items})${escapeHtml(resumeNote)}</span>`);
+        badges.push(`<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-400">Частково: ліміт моделей (${run.completed_items}/${run.total_items}${escapeHtml(modelsNote)})${escapeHtml(resumeNote)}</span>`);
     } else if (status === 'incomplete') {
         badges.push(`<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">Неповна (${run.completed_items}/${run.total_items})</span>`);
     } else if (status === 'cancelled') {
@@ -375,6 +377,13 @@ function getRunStatusBadgeHtml(run) {
         badges.push(`<span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${judgeCls} border">Суддя: ${judgedCount}/${compCount}</span>`);
     }
     return badges.join(' ');
+}
+
+const BLOCKING_STATUS_CODES = ['no_credit', 'invalid_key', 'no_key', 'model_missing'];
+
+// Модель, яка гарантовано не відповість (баланс, ключ, зникла з API); ліміти запитів сюди не входять, вони тимчасові
+function isModelBlocked(model) {
+    return BLOCKING_STATUS_CODES.includes(model.status_code);
 }
 
 function getStatusBadgeHtml(statusCode, statusLabel) {

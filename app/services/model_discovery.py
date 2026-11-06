@@ -54,6 +54,8 @@ STATUS_LABELS_UK: Dict[str, str] = {
     "unchecked": "Не перевірено",
 }
 
+BLOCKING_MODEL_STATUSES = ("no_credit", "invalid_key", "no_key", "model_missing")
+
 _NON_TEXT_KEYWORDS = (
     "embedding",
     "embed",
@@ -870,6 +872,10 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "openrouter_model": or_equiv,
             "source": r.get("source", "discovered"),
             "is_custom": r.get("source") == "custom",
+            "is_free_tier": prov == "ollama" or bool(
+                lim["is_free_tier"] if lim.get("is_free_tier") is not None
+                else DEFAULT_MODELS_CATALOG.get(mid, {}).get("is_free_tier", False)
+            ),
             "is_dynamic": mid not in DEFAULT_MODELS_CATALOG,
             "is_new": (mid not in DEFAULT_MODELS_CATALOG) and _is_recently_seen(r.get("first_seen")),
             "enabled": bool(r.get("enabled")),

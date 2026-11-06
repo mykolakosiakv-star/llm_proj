@@ -373,6 +373,8 @@
                                 <span class="text-slate-300">|</span>
                                 <button type="button" onclick="toggleAllExpModelsCheckboxes(false)" class="text-slate-600 hover:underline">Жодної</button>
                                 <span class="text-slate-300">|</span>
+                                <button type="button" onclick="selectWorkingExpModels()" class="text-blue-700 hover:underline">Лише з доступом</button>
+                                <span class="text-slate-300">|</span>
                                 <button type="button" onclick="switchTab('settings')" class="text-slate-600 hover:underline">Керувати моделями</button>
                             </div>
                         </div>
@@ -1390,10 +1392,16 @@
                         <button onclick="probeApiLimits({ silent: false })" id="probeApiLimitsBtn" class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 transition">
                             Оновити статуси
                         </button>
-                        <button onclick="quickSelectSettingsModels('working')" class="px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 font-semibold transition">
-                            Увімкнути робочі з каталогу
-                        </button>
                     </div>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span class="text-slate-500 mr-1">Набір моделей:</span>
+                    <button onclick="quickSelectSettingsModels('working')" title="Усі моделі, що відповіли на перевірці" class="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-50">Усі робочі</button>
+                    <button onclick="quickSelectSettingsModels('free')" title="Робочі моделі на безкоштовних тарифах" class="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-50">Безкоштовні</button>
+                    <button onclick="quickSelectSettingsModels('paid')" title="Робочі моделі на платних тарифах" class="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-50">Платні</button>
+                    <button onclick="quickSelectSettingsModels('local')" title="Моделі, запущені через Ollama" class="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-50">Локальні</button>
+                    <button onclick="quickSelectSettingsModels('custom')" title="Моделі, додані вручну" class="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-50">Мої</button>
                 </div>
 
                 <div id="probeFeedbackBanner" class="hidden p-3 rounded-xl text-xs font-medium flex items-center justify-between transition"></div>

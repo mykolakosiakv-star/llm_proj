@@ -1023,35 +1023,6 @@ def ensure_sandbox_run_id() -> int:
     return run_id
 
 
-def pause_active_runs_for_quota(model_id: str, message: str, resume_after: Optional[str] = None) -> List[int]:
-    """Переводить активні серії експериментів у статус paused_quota при вичерпанні денного ліміту."""
-    conn = get_connection()
-    cur = conn.cursor()
-    paused_ids: List[int] = []
-    try:
-        cur.execute("SELECT id, summary_json FROM experiment_runs WHERE status = 'running' AND execution_mode != 'sandbox'")
-        rows = cur.fetchall()
-        for r in rows:
-            run_id = int(r["id"])
-            paused_ids.append(run_id)
-            try:
-                summary = json.loads(r["summary_json"] or "{}")
-            except Exception:
-                summary = {}
-            summary["quota_paused"] = True
-            summary["quota_model_id"] = model_id
-            summary["quota_message"] = message
-            summary["resume_after"] = resume_after or "після оновлення добової квоти (Gemini: опівночі за тихоокеанським часом, інші: 00:00 UTC)"
-            cur.execute(
-                "UPDATE experiment_runs SET status = 'paused_quota', summary_json = ? WHERE id = ?",
-                (json.dumps(summary, ensure_ascii=False), run_id),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-    return paused_ids
-
-
 KNOWN_RUN_STATUSES = ("running", "completed", "incomplete", "failed", "cancelled", "paused_quota")
 
 

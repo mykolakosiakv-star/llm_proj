@@ -26,13 +26,11 @@ from app.config import (
 from app.database import (
     get_daily_usage_count,
     increment_daily_usage_count,
-    pause_active_runs_for_quota,
     upsert_model_registry_entry,
     upsert_model_status,
 )
 from app.services.logger import (
     log_event,
-    request_cancel_experiment,
     update_runtime_status,
 )
 from app.services.model_discovery import (
@@ -97,7 +95,7 @@ class RequestScheduler:
         return round(waited, 2)
 
     def check_and_reserve_rpd(self, model_id: str, rpd_limit: Optional[int]) -> int:
-        """Перевіряє денну квоту в SQLite; при вичерпанні зупиняє пакетний прогін у paused_quota."""
+        """Перевіряє денну квоту в SQLite; при вичерпанні піднімає помилку, а серія пропускає лише цю модель."""
         if rpd_limit and rpd_limit > 0:
             used = get_daily_usage_count(model_id)
             if used >= rpd_limit:
@@ -136,7 +134,7 @@ class RequestScheduler:
         message: str,
         http_code: Optional[int] = 429,
     ) -> None:
-        """Фіксує статус daily_quota та переводить активний пакетний прогін у стан paused_quota."""
+        """Фіксує статус daily_quota. Серію не зупиняє: раннер сам пропускає цю модель і веде решту далі."""
         upsert_model_status(
             model_key=model_id,
             status="daily_quota",
@@ -144,8 +142,6 @@ class RequestScheduler:
             latency_ms=None,
             message=message[:240],
         )
-        pause_active_runs_for_quota(model_id=model_id, message=message)
-        request_cancel_experiment()
 
 
 REQUEST_SCHEDULER = RequestScheduler()
