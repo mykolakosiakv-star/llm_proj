@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from functools import lru_cache
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -476,6 +477,7 @@ def init_db() -> None:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.close()
+    migrate_fintech_query_codes()
     backfill_kb_from_queries()
 
 
@@ -699,6 +701,59 @@ def _sync_query_to_kb(cur: sqlite3.Cursor, q: sqlite3.Row) -> None:
             cur.execute("UPDATE kb_chunks SET text = ?, domain = ? WHERE document_id = ? AND chunk_index = 0", (q["context_fact"], q["domain"], doc_id))
     chunk_id = cur.execute("SELECT id FROM kb_chunks WHERE document_id = ? AND chunk_index = 0", (doc_id,)).fetchone()["id"]
     cur.execute("INSERT OR IGNORE INTO query_gold_chunks (query_id, chunk_id) VALUES (?, ?)", (q["id"], chunk_id))
+
+
+FINTECH_LEGACY_CODE_RE = re.compile(r"^(?:INF|NAV|PRC|TRB|CLR)-\d+(?:-V\d+)?$")
+
+
+def _remap_codes_in_json(conn: sqlite3.Connection, table: str, column: str, mapping: Dict[str, str], key: Optional[str] = None) -> None:
+    """Замінює старі коди у JSON-полі: або в самому списку, або в списку під ключем key."""
+    for row in conn.execute(f"SELECT id, {column} FROM {table} WHERE {column} LIKE '%-%'").fetchall():
+        try:
+            data = json.loads(row[column] or "null")
+        except ValueError:
+            continue
+        holder = data if key is None else (data.get(key) if isinstance(data, dict) else None)
+        if not isinstance(holder, list):
+            continue
+        remapped = [mapping.get(c, c) if isinstance(c, str) else c for c in holder]
+        if remapped != holder:
+            if key is None:
+                data = remapped
+            else:
+                data[key] = remapped
+            conn.execute(f"UPDATE {table} SET {column} = ? WHERE id = ?", (json.dumps(data, ensure_ascii=False), row["id"]))
+
+
+def migrate_fintech_query_codes() -> int:
+    """Коди запитів fintech (INF-01) отримують префікс сфери (FIN-INF-01), як у решти сфер.
+
+    Зміна зачіпає запити, фрагменти корпусу, результати, помилки та списки кодів у серіях. Повторний виклик нічого не робить.
+    """
+    global _DATASET_HASH_CACHE
+    conn = get_connection()
+    try:
+        existing = {r["code"] for r in conn.execute("SELECT code FROM queries")}
+        mapping = {
+            c: f"FIN-{c}" for c in existing
+            if FINTECH_LEGACY_CODE_RE.match(c) and f"FIN-{c}" not in existing
+            and conn.execute("SELECT domain FROM queries WHERE code = ?", (c,)).fetchone()["domain"] == "fintech"
+        }
+        if not mapping:
+            return 0
+        for old, new in mapping.items():
+            conn.execute("UPDATE queries SET code = ? WHERE code = ?", (new, old))
+            conn.execute("UPDATE queries SET variant_of = ? WHERE variant_of = ?", (new, old))
+            conn.execute("UPDATE kb_documents SET doc_code = ?, title = CASE WHEN title = ? THEN ? ELSE title END WHERE doc_code = ?", (new, old, new, old))
+            conn.execute("UPDATE evaluation_results SET query_code = ? WHERE query_code = ?", (new, old))
+            conn.execute("UPDATE run_errors SET query_code = ? WHERE query_code = ?", (new, old))
+        _remap_codes_in_json(conn, "evaluation_results", "retrieved_ids_json", mapping)
+        _remap_codes_in_json(conn, "experiment_runs", "settings_snapshot_json", mapping, key="selected_query_codes")
+        conn.commit()
+        return len(mapping)
+    finally:
+        conn.close()
+        _DATASET_HASH_CACHE = None
 
 
 def backfill_kb_from_queries() -> None:

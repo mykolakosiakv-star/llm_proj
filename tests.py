@@ -1876,3 +1876,56 @@ def test_ollama_is_not_polled_unless_a_local_model_is_enabled():
         conn.execute("UPDATE model_registry SET enabled = 0 WHERE provider = 'ollama'")
         conn.commit()
         conn.close()
+
+
+def test_fintech_codes_get_the_domain_prefix_everywhere_and_migration_is_repeatable():
+    from app.database import get_connection, migrate_fintech_query_codes, upsert_query_item
+    # старі записи: запит, його фрагмент корпусу, результат із retrieved_ids, помилка та серія з переліком кодів
+    upsert_query_item({"code": "INF-77", "domain": "fintech", "category": "informational", "user_query": "Старий запит?", "context_fact": "Факт 77.",
+                       "reference_answer": "Факт 77.", "required_keywords": ["факт"], "source": "manual"})
+    upsert_query_item({"code": "INF-77-V1", "domain": "fintech", "category": "informational", "user_query": "Перефраз старого?", "context_fact": "Факт 77.",
+                       "reference_answer": "Факт 77.", "required_keywords": ["факт"], "source": "manual", "variant_of": "INF-77", "variant_type": "paraphrase"})
+    conn = get_connection()
+    run_id = conn.execute(
+        "INSERT INTO experiment_runs (created_at, title, description, models_json, prompts_json, categories_json, total_items, completed_items, "
+        "status, execution_mode, summary_json, settings_snapshot_json) VALUES ('2026-11-06 12:00:00', 'rename-test', '', '[]', '[]', '[]', 1, 1, "
+        "'completed', 'live_api', '{}', ?)", (json.dumps({"selected_query_codes": ["INF-77", "IT-INF-01"]}),),
+    ).lastrowid
+    conn.execute("INSERT INTO run_errors (run_id, query_code, model_id, prompt_code, repeat_index, error_type, message, created_at) "
+                 "VALUES (?, 'INF-77', 'm', 'P3', 1, 'x', 'y', '2026-11-06 12:00:00')", (run_id,))
+    conn.commit()
+    conn.close()
+    try:
+        assert migrate_fintech_query_codes() == 2
+        conn = get_connection()
+        codes = {r["code"] for r in conn.execute("SELECT code FROM queries")}
+        assert {"FIN-INF-77", "FIN-INF-77-V1"} <= codes and "INF-77" not in codes
+        assert conn.execute("SELECT variant_of FROM queries WHERE code = 'FIN-INF-77-V1'").fetchone()[0] == "FIN-INF-77"
+        assert conn.execute("SELECT 1 FROM kb_documents WHERE doc_code = 'FIN-INF-77'").fetchone()
+        assert conn.execute("SELECT 1 FROM kb_documents WHERE doc_code = 'INF-77'").fetchone() is None
+        assert conn.execute("SELECT query_code FROM run_errors WHERE run_id = ?", (run_id,)).fetchone()[0] == "FIN-INF-77"
+        snapshot = json.loads(conn.execute("SELECT settings_snapshot_json FROM experiment_runs WHERE id = ?", (run_id,)).fetchone()[0])
+        assert snapshot["selected_query_codes"] == ["FIN-INF-77", "IT-INF-01"]      # коди інших сфер не чіпаються
+        conn.close()
+        # списки знайдених фрагментів у результатах переписуються тією ж заміною
+        from app.database import _remap_codes_in_json
+        conn = get_connection()
+        conn.execute("CREATE TEMP TABLE remap_probe (id INTEGER PRIMARY KEY, ids TEXT)")
+        conn.execute("INSERT INTO remap_probe (ids) VALUES (?)", (json.dumps(["INF-77", "IT-INF-01", "PRC-02"]),))
+        _remap_codes_in_json(conn, "remap_probe", "ids", {"INF-77": "FIN-INF-77", "PRC-02": "FIN-PRC-02"})
+        assert json.loads(conn.execute("SELECT ids FROM remap_probe").fetchone()[0]) == ["FIN-INF-77", "IT-INF-01", "FIN-PRC-02"]
+        conn.close()
+        assert migrate_fintech_query_codes() == 0                                    # повторно нічого не змінює
+    finally:
+        conn = get_connection()
+        conn.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
+        conn.execute("DELETE FROM queries WHERE code LIKE 'FIN-INF-77%'")
+        conn.execute("DELETE FROM kb_documents WHERE doc_code LIKE 'FIN-INF-77%'")
+        conn.commit()
+        conn.close()
+
+
+def test_seeded_fintech_queries_use_the_domain_prefix():
+    from app.database import fetch_all_queries
+    fintech = [q["code"] for q in fetch_all_queries(domain="fintech")]
+    assert len(fintech) == 60 and all(c.startswith("FIN-") for c in fintech)
