@@ -9,7 +9,8 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Body
@@ -50,6 +51,7 @@ from app.database import (
     compute_dataset_hash,
     fetch_all_domains,
     upsert_domain,
+    fetch_all_model_statuses,
     fetch_model_registry_by_id,
     upsert_model_registry_entry,
     delete_custom_model_from_registry,
@@ -97,6 +99,7 @@ from app.services.experiment_runner import (
     start_resume_experiment_task,
     evaluate_run_with_judge,
     start_judge_experiment_task,
+    select_stratified_queries,
     compute_run_analytics,
     compute_flexible_analytics,
     get_evaluation_item_detail,
@@ -1283,6 +1286,26 @@ async def api_delete_custom_model(model_key: str):
     return {"status": "deleted", "model_key": model_key}
 
 
+def _is_recent(timestamp: Optional[str], hours: float) -> bool:
+    try:
+        return (datetime.now() - datetime.strptime(timestamp or "", "%Y-%m-%d %H:%M:%S")).total_seconds() < hours * 3600
+    except ValueError:
+        return False
+
+
+def _selection_breakdown(
+    selected: List[Dict[str, Any]], corpus: List[Dict[str, Any]], target_domains: List[str], categories: List[str], seed: int
+) -> Dict[str, Any]:
+    """Скільки запитів піде в серію по кожній сфері й скільки їх є в базі."""
+    names = {d["code"]: d["domain_name"] for d in fetch_all_domains()}
+    by_domain = []
+    for d in target_domains:
+        in_domain = [q for q in corpus if str(q.get("domain") or "fintech") == d and q["category"] in categories]
+        taken = [q for q in selected if str(q.get("domain") or "fintech") == d]
+        by_domain.append({"code": d, "name": names.get(d, d), "selected": len(taken), "available": len(in_domain)})
+    return {"total": len(selected), "seed": seed, "by_domain": by_domain}
+
+
 @app.post("/api/experiments/estimate")
 async def api_estimate_batch_experiment(payload: dict = Body(...)):
     """Обчислює попередній прогноз вартості, токенів, часу та денної квоти перед запуском серії."""
@@ -1293,15 +1316,26 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
     repeats = max(1, int(payload.get("repeats") or 1))
     use_judge = bool(payload.get("use_judge", False))
     judge_model_id = payload.get("judge_model_id")
-    domain = payload.get("domain") or "fintech"
     modes = payload.get("context_modes") or ([payload.get("context_mode")] if payload.get("context_mode") else ["gold_context"])
     modes_count = max(1, len(modes))
 
-    all_queries = fetch_all_queries(domain=domain, reviewed_only=True)
-    selected_queries_count = 0
-    for cat in categories:
-        cat_qs = [q for q in all_queries if q.get("category") == cat]
-        selected_queries_count += min(len(cat_qs), max_per_cat)
+    # Прогноз використовує той самий відбір, що й справжній запуск, тому числа збігаються
+    seed = int(payload.get("seed") or 42)
+    selected: List[Dict[str, Any]] = []
+    corpus: List[Dict[str, Any]] = []
+    target_domains: List[str] = []
+    if categories:
+        selected, corpus, target_domains = select_stratified_queries(
+            domain=payload.get("domain") or "fintech",
+            domains=payload.get("domains") or None,
+            categories=categories,
+            max_queries_per_category=max_per_cat,
+            equal_domain_sample=bool(payload.get("equal_domain_sample")),
+            seed=seed,
+        )
+    selected_queries_count = len(selected)
+    selection = _selection_breakdown(selected, corpus, target_domains, categories, seed)
+    statuses = fetch_all_model_statuses()
 
     calls_per_model = selected_queries_count * max(1, len(prompt_codes)) * modes_count * repeats
     total_generation_calls = calls_per_model * len(model_ids)
@@ -1336,8 +1370,14 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
         rpd = cfg.get("rpd")
         used_today = get_daily_usage_count(m_id)
         remaining_rpd = max(0, int(rpd) - used_today) if rpd else None
-        quota_exceeded = bool(remaining_rpd is not None and calls_per_model > remaining_rpd)
-        if quota_exceeded:
+        limits_info = (fetch_model_registry_by_id(m_id) or {}).get("limits") or {}
+        rpd_source = (limits_info.get("limits_source") or {}).get("rpd", "catalog")
+        model_status = statuses.get(m_id) or {}
+        exhausted_now = model_status.get("status") == "daily_quota" and _is_recent(model_status.get("checked_at"), hours=6)
+        quota_exceeded = bool(remaining_rpd is not None and calls_per_model > remaining_rpd) or exhausted_now
+        if exhausted_now:
+            quota_warnings.append(f"{cfg.get('name', m_id)}: добовий ліміт провайдера вже вичерпано, відповіді не буде до оновлення квоти")
+        elif quota_exceeded:
             quota_warnings.append(
                 f"{cfg.get('name', m_id)}: потрібно {calls_per_model} зап., залишок RPD {remaining_rpd}/{rpd}"
             )
@@ -1360,6 +1400,8 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
                 "rpd": rpd,
                 "used_today": used_today,
                 "remaining_rpd": remaining_rpd,
+                "rpd_source": rpd_source,
+                "exhausted_now": exhausted_now,
                 "quota_exceeded": quota_exceeded,
             }
         )
@@ -1400,6 +1442,7 @@ async def api_estimate_batch_experiment(payload: dict = Body(...)):
 
     return {
         "queries_count": selected_queries_count,
+        "selection": selection,
         "calls_per_model": calls_per_model,
         "total_generation_calls": total_generation_calls,
         "total_judge_calls": total_judge_calls,

@@ -37,6 +37,7 @@ from app.services.logger import (
 )
 from app.services.model_discovery import (
     classify_api_response,
+    extract_daily_quota_limit,
     extract_limits_from_headers,
 )
 
@@ -235,6 +236,9 @@ def _handle_http_failure(
     )
 
     if status_code == "daily_quota":
+        learned_rpd = extract_daily_quota_limit(payload)
+        if learned_rpd and model_id:
+            upsert_model_registry_entry({"id": model_id, "limits": {"rpd": learned_rpd, "limits_source": {"rpd": "header"}}})
         full_msg = f"Денний ліміт вичерпано ({provider_label} / {model_name}): {msg}"
         log_event(stage=f"LLM <- {provider_label}", message=full_msg, level="ERROR")
         REQUEST_SCHEDULER.handle_daily_quota_exhausted(model_id or model_name, full_msg, resp.status_code)

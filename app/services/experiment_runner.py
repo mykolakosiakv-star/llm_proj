@@ -585,6 +585,10 @@ def _normalize_context_modes(
     return modes
 
 
+def _query_sort_key(q: Dict[str, Any]) -> Tuple[int, str]:
+    return int(q.get("id") or 0), str(q.get("code") or q.get("query_code") or "")
+
+
 def select_stratified_queries(
     domain: str = "fintech",
     domains: Optional[List[str]] = None,
@@ -593,10 +597,11 @@ def select_stratified_queries(
     equal_domain_sample: bool = False,
     seed: int = 42,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
-    """
-    Вибирає запити для серії експериментів.
-    Якщо обрано декілька сфер або equal_domain_sample=True, бере однакову кількість запитів
-    із кожної комбінації (сфера, категорія) за фіксованим seed для чесної перевірки гіпотези H1.
+    """Вибирає запити для серії: до max_queries_per_category з кожної пари (сфера, категорія).
+
+    Якщо в парі запитів більше, ніж потрібно, вибірка випадкова, але відтворювана: вона залежить лише від seed.
+    З equal_domain_sample у кожній категорії береться однакова кількість запитів з усіх сфер
+    (не більше, ніж у найменшій сфері), щоб порівняння сфер для H1 було чесним.
     """
     direct_list_mode = isinstance(domain, list)
     if direct_list_mode:
@@ -630,43 +635,29 @@ def select_stratified_queries(
         filtered_corpus = [q for q in all_corpus if str(q.get("domain") or "fintech") == "fintech"]
         target_domains = ["fintech"]
 
-    if len(target_domains) == 1 and not equal_domain_sample:
-        selected: List[Dict[str, Any]] = []
-        for cat in cats:
-            cat_qs = [q for q in filtered_corpus if q["category"] == cat][:max_queries_per_category]
-            selected.extend(cat_qs)
-        return selected if direct_list_mode else (selected, filtered_corpus, target_domains)
-
     by_dom_cat: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for d in target_domains:
         for cat in cats:
-            cell_qs = [
-                q for q in filtered_corpus
-                if str(q.get("domain") or "fintech") == d and q["category"] == cat
-            ]
-            cell_qs.sort(key=lambda x: (int(x.get("id") or 0), str(x.get("code") or x.get("query_code") or "")))
-            by_dom_cat[(d, cat)] = cell_qs
+            cell = [q for q in filtered_corpus if str(q.get("domain") or "fintech") == d and q["category"] == cat]
+            cell.sort(key=_query_sort_key)
+            by_dom_cat[(d, cat)] = cell
 
-    selected = []
+    selected: List[Dict[str, Any]] = []
     for cat in cats:
+        k_take = max_queries_per_category
         if equal_domain_sample and len(target_domains) >= 2:
-            counts = [len(by_dom_cat.get((d, cat), [])) for d in target_domains]
-            non_zero_counts = [c for c in counts if c > 0]
-            k_take = min([max_queries_per_category] + non_zero_counts) if non_zero_counts else 0
-        else:
-            k_take = max_queries_per_category
-
+            non_zero = [len(by_dom_cat[(d, cat)]) for d in target_domains if by_dom_cat[(d, cat)]]
+            k_take = min([max_queries_per_category] + non_zero) if non_zero else 0
         for d in target_domains:
-            pool = list(by_dom_cat.get((d, cat), []))
+            pool = by_dom_cat[(d, cat)]
             if not pool or k_take <= 0:
                 continue
-            if equal_domain_sample and len(pool) > k_take:
-                cell_rng = random.Random(f"{seed}:{d}:{cat}")
-                sampled = cell_rng.sample(pool, k_take)
-                sampled.sort(key=lambda x: (int(x.get("id") or 0), str(x.get("code") or x.get("query_code") or "")))
+            if len(pool) > k_take:
+                sampled = random.Random(f"{seed}:{d}:{cat}").sample(pool, k_take)
+                sampled.sort(key=_query_sort_key)
                 selected.extend(sampled)
             else:
-                selected.extend(pool[:k_take])
+                selected.extend(pool)
 
     return selected if direct_list_mode else (selected, filtered_corpus, target_domains)
 
@@ -727,6 +718,7 @@ def _create_batch_run_record(
         "use_judge": bool(judge_model_id) or bool(use_judge),
         "judge_model": judge_model_id or "",
         "allow_self_judge": bool(allow_self_judge),
+        "selected_query_codes": [q.get("code") or q.get("query_code") for q in selected_queries],
     }
     code_ver = compute_code_version_hash()
     ds_hash = compute_dataset_hash()
@@ -1359,13 +1351,16 @@ async def resume_batch_experiment(
     max_queries_per_category = int(snapshot.get("max_queries_per_category") or max(1, round(total_items / denom)))
 
     run_domain = str(snapshot.get("domain") or "fintech")
-    all_queries = fetch_all_queries(domain=run_domain, reviewed_only=True)
-    if not all_queries:
-        all_queries = fetch_all_queries(domain="fintech", reviewed_only=True)
-    selected_queries = []
-    for cat in categories:
-        cat_qs = [q for q in all_queries if q["category"] == cat][:max_queries_per_category]
-        selected_queries.extend(cat_qs)
+    saved_codes = snapshot.get("selected_query_codes")
+    if saved_codes:
+        by_code = {q["code"]: q for q in fetch_all_queries(domain="all")}
+        selected_queries = [by_code[c] for c in saved_codes if c in by_code]
+    else:
+        # Серії, створені до збереження списку запитів, відновлюються за старим правилом
+        all_queries = fetch_all_queries(domain=run_domain, reviewed_only=True) or fetch_all_queries(domain="fintech", reviewed_only=True)
+        selected_queries = []
+        for cat in categories:
+            selected_queries.extend([q for q in all_queries if q["category"] == cat][:max_queries_per_category])
 
     expected_total = len(selected_queries) * len(modes) * len(prompt_codes) * len(model_ids) * repeats
     if total_items < expected_total:
@@ -1436,7 +1431,7 @@ async def resume_batch_experiment(
                                 ctx_info = resolve_experiment_context(
                                     query_item=q,
                                     context_mode=ctx_mode,
-                                    domain=run_domain,
+                                    domain=str(q.get("domain") or run_domain),
                                     top_k=eff_top_k,
                                 )
                             if prompt_pack is None:
@@ -1447,7 +1442,7 @@ async def resume_batch_experiment(
                                     category_code=q["category"],
                                     category_name_uk=cat_info["name_uk"],
                                     exclude_query_code=q["code"],
-                                    domain=run_domain,
+                                    domain=str(q.get("domain") or run_domain),
                                 )
 
                             step_idx = completed + 1

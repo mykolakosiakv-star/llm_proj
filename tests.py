@@ -1765,3 +1765,114 @@ def test_hypotheses_overview_is_cached_until_runs_change():
         conn.commit()
         conn.close()
         analytics._HYPOTHESES_CACHE.update(key=None, value=None)
+
+
+def _mock_pool(domain, category, n):
+    return [{"id": i + 1, "code": f"{domain}-{category}-{i}", "domain": domain, "category": category} for i in range(n)]
+
+
+def test_series_selection_is_per_domain_and_category_random_but_reproducible():
+    from app.services.experiment_runner import select_stratified_queries
+    pool = _mock_pool("fintech", "informational", 30) + _mock_pool("ecommerce", "informational", 3)
+    free = select_stratified_queries(pool, max_queries_per_category=5, equal_domain_sample=False, seed=42)
+    # N означає: до N запитів на кожну сферу в кожній категорії, а не N на всі сфери разом
+    assert sum(q["domain"] == "fintech" for q in free) == 5 and sum(q["domain"] == "ecommerce" for q in free) == 3
+    equal = select_stratified_queries(pool, max_queries_per_category=5, equal_domain_sample=True, seed=42)
+    assert sum(q["domain"] == "fintech" for q in equal) == 3 == sum(q["domain"] == "ecommerce" for q in equal)
+    # випадково, але відтворювано, і це не просто перші запити з бази
+    again = select_stratified_queries(pool, max_queries_per_category=5, equal_domain_sample=False, seed=42)
+    other = select_stratified_queries(pool, max_queries_per_category=5, equal_domain_sample=False, seed=7)
+    assert [q["code"] for q in free] == [q["code"] for q in again]
+    assert [q["code"] for q in free] != [q["code"] for q in other]
+    first_five = [f"fintech-informational-{i}" for i in range(5)]
+    assert [q["code"] for q in free if q["domain"] == "fintech"] != first_five
+
+
+def test_series_record_stores_the_exact_query_list_for_resume():
+    from app.services.experiment_runner import _create_batch_run_record
+    from app.database import get_connection
+    run_id, _ = _create_batch_run_record(
+        title="selection-test", description="", model_ids=["gemini-3.1-flash-lite"], prompt_codes=["P3"],
+        categories=["informational", "procedural"], max_queries_per_category=2, repeats=1,
+        domains=["fintech", "telecom"], equal_domain_sample=True,
+    )
+    conn = get_connection()
+    row = conn.execute("SELECT settings_snapshot_json, total_items FROM experiment_runs WHERE id = ?", (run_id,)).fetchone()
+    conn.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
+    conn.commit()
+    conn.close()
+    snapshot = json.loads(row["settings_snapshot_json"])
+    codes = snapshot["selected_query_codes"]
+    assert len(codes) == 8 == row["total_items"]          # 2 сфери x 2 категорії x 2 запити
+    assert len(set(codes)) == 8
+
+
+def test_estimate_uses_the_same_selection_as_the_series():
+    client = TestClient(app)
+    body = {"domains": ["fintech", "telecom"], "equal_domain_sample": True, "model_ids": ["gemini-3.1-flash-lite"], "prompt_codes": ["P3"],
+            "categories": ["informational", "procedural"], "max_queries_per_category": 3, "repeats": 2, "context_modes": ["retrieved_context"]}
+    res = client.post("/api/experiments/estimate", json=body).json()
+    # 2 сфери x 2 категорії x 3 запити, повтори множать виклики, але не кількість запитів
+    assert res["queries_count"] == 12 and res["selection"]["total"] == 12
+    assert {d["code"]: d["selected"] for d in res["selection"]["by_domain"]} == {"fintech": 6, "telecom": 6}
+    assert res["total_generation_calls"] == 12 * 2
+    first = res["models"][0]
+    assert "rpd_source" in first and "exhausted_now" in first
+    assert client.post("/api/experiments/estimate", json={**body, "categories": []}).json()["queries_count"] == 0
+
+
+def test_real_daily_limit_is_learned_from_gemini_error_and_ollama_is_skipped_when_unused():
+    import httpx
+    from app.services.model_discovery import extract_daily_quota_limit, _ping_single_model
+    day = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota",
+                     "details": [{"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20"}]}]}}
+    minute = {"error": {"details": [{"violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "quotaValue": "5"}]}]}}
+    assert extract_daily_quota_limit(day) == 20
+    assert extract_daily_quota_limit(minute) is None and extract_daily_quota_limit(None) is None
+
+    stub = AsyncMock(return_value=httpx.Response(429, json=day))
+
+    async def ping():
+        with patch("httpx.AsyncClient.post", new=stub):
+            async with httpx.AsyncClient() as client:
+                return await _ping_single_model(client=client, provider="gemini", api_model_name="m", api_key="k", base_url="")
+    status, _, _, _, limits = asyncio.run(ping())
+    assert status == "daily_quota" and limits["rpd"] == 20
+
+
+def test_ollama_is_not_polled_unless_a_local_model_is_enabled():
+    from app.services import model_discovery as md
+    from app.database import get_connection
+    called = []
+
+    def fake(name):
+        async def lister(client, key):
+            called.append(name)
+            return {"status": "ok", "models_total": 0}, {}
+        return lister
+
+    keys = {p: "" for p in ("gemini", "groq", "openai", "anthropic", "openrouter", "ollama")}
+    patches = [patch.object(md, f"_list_{name}", new=fake(name)) for name in keys]
+    conn = get_connection()
+    conn.execute("UPDATE model_registry SET enabled = 0 WHERE provider = 'ollama'")
+    conn.commit()
+    conn.close()
+    for p in patches:
+        p.start()
+    try:
+        asyncio.run(md._discover_models(None, keys, "2026-11-06 10:00:00"))
+        assert "ollama" not in called and "gemini" in called
+        conn = get_connection()
+        conn.execute("UPDATE model_registry SET enabled = 1 WHERE provider = 'ollama'")
+        conn.commit()
+        conn.close()
+        called.clear()
+        asyncio.run(md._discover_models(None, keys, "2026-11-06 10:00:00"))
+        assert "ollama" in called
+    finally:
+        for p in patches:
+            p.stop()
+        conn = get_connection()
+        conn.execute("UPDATE model_registry SET enabled = 0 WHERE provider = 'ollama'")
+        conn.commit()
+        conn.close()

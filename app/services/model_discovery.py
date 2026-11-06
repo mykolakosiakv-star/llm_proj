@@ -290,6 +290,22 @@ def is_text_generation_model(
     return True
 
 
+def extract_daily_quota_limit(payload: Any) -> Optional[int]:
+    """Реальний добовий ліміт запитів, який Gemini повідомляє в деталях помилки 429 (quotaValue).
+
+    Він різний для різних моделей і тарифів, а за каталогом його вгадати не можна: бувають значення в десятки запитів.
+    """
+    error = payload.get("error") if isinstance(payload, dict) else None
+    for detail in (error or {}).get("details") or []:
+        for violation in detail.get("violations") or []:
+            if "perday" in str(violation.get("quotaId", "")).lower().replace("_", ""):
+                try:
+                    return int(violation.get("quotaValue"))
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
 def extract_limits_from_headers(
     provider_or_headers: Any,
     headers: Optional[Any] = None,
@@ -717,6 +733,13 @@ async def _ping_single_model(
     lat = int((time.perf_counter() - t0) * 1000)
     lim = extract_limits_from_headers(provider, resp.headers)
     st, msg = classify_api_response(provider, resp.status_code, raw_text=resp.text)
+    if st == "daily_quota":
+        try:
+            learned = extract_daily_quota_limit(resp.json())
+        except ValueError:
+            learned = None
+        if learned:
+            lim = {**lim, "rpd": learned}
     return st, resp.status_code, lat, msg, lim
 
 
@@ -1079,10 +1102,15 @@ async def _discover_models(client: httpx.AsyncClient, keys: Dict[str, str], now_
         "openrouter": _list_openrouter,
         "ollama": _list_ollama,
     }
-    pids = list(listers)
-    results = await asyncio.gather(*(listers[p](client, keys[p]) for p in pids), return_exceptions=True)
     lists: Dict[str, Dict[str, Any]] = {}
     listed_ok: set = set()
+    if not any(r["provider"] == "ollama" and r.get("enabled") for r in fetch_all_model_registry()):
+        # Локальний сервер опитується лише тоді, коли ввімкнено хоча б одну локальну модель, інакше журнал засмічують помилки з'єднання
+        listers.pop("ollama")
+        _remember_provider_report("ollama", {"status": "unchecked", "configured": bool(keys["ollama"]),
+                                             "error": "Не використовується: жодну локальну модель не ввімкнено."}, now_str)
+    pids = list(listers)
+    results = await asyncio.gather(*(listers[p](client, keys[p]) for p in pids), return_exceptions=True)
     for pid, res in zip(pids, results):
         if isinstance(res, Exception):
             status, message = classify_api_response(pid, None, raw_text=str(res), is_network_error=True)
