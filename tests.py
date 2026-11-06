@@ -1929,3 +1929,17 @@ def test_seeded_fintech_queries_use_the_domain_prefix():
     from app.database import fetch_all_queries
     fintech = [q["code"] for q in fetch_all_queries(domain="fintech")]
     assert len(fintech) == 60 and all(c.startswith("FIN-") for c in fintech)
+
+
+def test_quiet_polling_filter_hides_only_successful_polling_lines():
+    import logging
+    from app.main import QuietPollingFilter
+
+    def record(text):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, text, None, None)
+    flt = QuietPollingFilter()
+    assert flt.filter(record('127.0.0.1:1 - "GET /api/logs?since_id=3 HTTP/1.1" 200 OK')) is False
+    assert flt.filter(record('127.0.0.1:1 - "GET /api/models/status HTTP/1.1" 200 OK')) is False
+    assert flt.filter(record('127.0.0.1:1 - "GET /api/logs?since_id=3 HTTP/1.1" 500 Internal Server Error')) is True
+    assert flt.filter(record('127.0.0.1:1 - "POST /api/models/status/refresh HTTP/1.1" 200 OK')) is True
+    assert flt.filter(record('127.0.0.1:1 - "POST /api/assistant/ask HTTP/1.1" 200 OK')) is True

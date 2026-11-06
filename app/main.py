@@ -8,6 +8,7 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -126,9 +127,20 @@ def _mask_key(val: str) -> str:
     return f"{val[:5]}...{val[-4:]}"
 
 
+class QuietPollingFilter(logging.Filter):
+    """Інтерфейс кілька разів на секунду опитує журнал і статуси. Успішні рядки цих запитів ховаються, помилки лишаються."""
+
+    NOISY_PATHS = ("GET /api/logs", "GET /api/models/status ")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not (any(path in message for path in self.NOISY_PATHS) and " 200 " in message)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Ініціалізує таблиці SQLite, реєстр моделей та довідник типових запитів і промптів."""
+    logging.getLogger("uvicorn.access").addFilter(QuietPollingFilter())
     init_db()
     await asyncio.to_thread(seed_database_if_needed)
     sync_model_registry_from_env()

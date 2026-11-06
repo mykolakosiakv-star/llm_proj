@@ -29,7 +29,7 @@ const MODEL_COLORS = [
 
 document.addEventListener('DOMContentLoaded', async () => {
     await initApplication();
-    setInterval(pollLogsAndStatus, 600);
+    schedulePoll();
 });
 
 async function initApplication() {
@@ -109,6 +109,16 @@ let _lastRefreshedProgress = -1;
 let _isPollingLogs = false;
 const _seenLogIds = new Set();
 
+// Поки нічого не виконується, опитування рідке; у прихованій вкладці ще рідше
+let _pollDelayMs = 600;
+
+function schedulePoll() {
+    setTimeout(async () => {
+        await pollLogsAndStatus();
+        schedulePoll();
+    }, document.hidden ? 10000 : _pollDelayMs);
+}
+
 async function pollLogsAndStatus() {
     if (_isPollingLogs) return;
     _isPollingLogs = true;
@@ -119,6 +129,7 @@ async function pollLogsAndStatus() {
             await pollActivePrompt(res.status.is_busy);
 
             const isBusy = Boolean(res.status.is_busy);
+            _pollDelayMs = isBusy ? 600 : 3000;
             const curProg = Number(res.status.progress_current || 0);
             if ((_wasBusyLastPoll && !isBusy) || (isBusy && curProg !== _lastRefreshedProgress)) {
                 _lastRefreshedProgress = curProg;
