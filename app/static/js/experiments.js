@@ -77,7 +77,7 @@ function renderExpJudgeList() {
             cls = allowSelf ? 'text-slate-600' : 'text-amber-800';
         }
         const working = m.status_code === 'ok' ? '' : ' Зараз не відповідає, суддя може не спрацювати.';
-        rows.push(row(m.id, `${escapeHtml(m.name)} <span class="text-xs font-mono font-normal text-slate-400">${escapeHtml(m.id)}</span>`,
+        rows.push(row(m.id, `${escapeHtml(m.name)} ${routeBadgeHtml(m)} <span class="text-xs font-mono font-normal text-slate-400">${escapeHtml(m.id)}</span>`,
             `Родина: ${escapeHtml(family(m))}. Ціна: ${m.price_known ? `$${m.cost_per_1m_input_usd}/1M` : 'не задана'}.`,
             getStatusBadgeHtml(m.status_code, m.status_label), escapeHtml(note + working), working && !note ? 'text-amber-800' : cls));
     });
@@ -104,7 +104,7 @@ function populateControls() {
         } else {
             const prevVal = modelSel.value;
             modelSel.innerHTML = enabledModels.map(m => {
-                const routeTag = (m.can_openrouter && m.route === 'openrouter') ? ' [OpenRouter]' : '';
+                const routeTag = routeTagText(m);
                 return `<option value="${m.id}">${escapeHtml(m.name)}${routeTag} (${escapeHtml(m.status_label || 'Працює')})</option>`;
             }).join('');
             if (prevVal && enabledModels.some(m => m.id === prevVal)) {
@@ -162,6 +162,7 @@ function populateControls() {
                             <div>
                                 <div class="font-semibold text-slate-800 text-xs flex items-center gap-1.5">
                                     <span>${escapeHtml(m.name)}</span>
+                                    ${routeBadgeHtml(m)}
                                     <span class="text-[10px] text-slate-400 font-mono">(${escapeHtml(m.id)})</span>
                                 </div>
                                 <div class="text-[10px] text-slate-500 font-mono">Контекст: ${inCtx} т. | Вх: ${pIn}</div>
@@ -191,7 +192,7 @@ function populateControls() {
         const checkedPrompts = new Set(existingPromptInputs.filter(el => el.checked).map(el => el.value));
 
         expPromptsBox.innerHTML = APP_STATE.prompts.map(p => {
-            const isChecked = isFirstPromptsRender ? (p.code === 'P1' || p.code === 'P3') : checkedPrompts.has(p.code);
+            const isChecked = isFirstPromptsRender ? true : checkedPrompts.has(p.code);
             return `
                 <label class="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" name="expPrompt" value="${p.code}" onchange="updateBatchExperimentEstimate()" ${isChecked ? 'checked' : ''} class="rounded text-blue-600">
@@ -390,6 +391,7 @@ async function startNewBatchExperiment() {
 function renderExperimentRunsList() {
     const container = document.getElementById('experimentRunsListContainer');
     const logRunSelect = document.getElementById('logFilterRunSelect');
+    renderLogsRunStatus();
 
     if (!APP_STATE.runs.length) {
         container.innerHTML = `<div class="p-4 text-center text-slate-400 bg-slate-50 rounded-lg border border-slate-200">
@@ -408,7 +410,6 @@ function renderExperimentRunsList() {
 
     container.innerHTML = APP_STATE.runs.map(r => {
         const isCurrent = r.id === APP_STATE.currentRunId;
-        const modelsStr = (r.models || []).join(', ');
         const promptsStr = (r.prompts || []).join(', ');
         const statusBadges = getRunStatusBadgeHtml(r);
         const isIncomplete = (r.completed_items || 0) < (r.total_items || 0) || r.status !== 'completed';
@@ -435,9 +436,9 @@ function renderExperimentRunsList() {
                     <div class="text-slate-600 text-[11px] leading-relaxed">
                         Дата: <span class="font-medium">${r.created_at}</span> |
                         Промпти: <b>${escapeHtml(promptsStr)}</b> |
-                        Моделі: <span class="font-mono text-[11px] text-slate-700">${escapeHtml(modelsStr)}</span> |
                         Датасет: <code>${escapeHtml(r.dataset_version || '2.0')}</code>
                     </div>
+                    <div class="space-y-1 pt-1">${getModelProgressHtml(r)}</div>
                 </div>
                 <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
                     <div class="flex flex-wrap items-center gap-1.5">

@@ -7,8 +7,8 @@
 from itertools import combinations
 import json
 import math
-import random
 from typing import Dict, Any, List, Optional, Tuple
+import numpy as np
 from scipy import stats as sp_stats
 
 from app.config import (
@@ -61,17 +61,14 @@ def bootstrap_mean_ci(
         v = round(float(vals[0]), 2)
         return (v, v)
 
-    rng = random.Random(seed)
-    boot_means: List[float] = []
-    for _ in range(n_boot):
-        sample = [vals[rng.randrange(n)] for _ in range(n)]
-        boot_means.append(sum(sample) / n)
-    boot_means.sort()
+    # Векторизований бутстреп: цикл на чистому Python рахував серію з 3600 замірів кілька хвилин.
+    rng = np.random.default_rng(seed)
+    data = np.asarray(vals, dtype=float)
+    boot_means = data[rng.integers(0, n, size=(n_boot, n))].mean(axis=1)
 
     alpha = (1.0 - confidence) / 2.0
-    ci_low = round(quantile_linear(boot_means, alpha), 2)
-    ci_high = round(quantile_linear(boot_means, 1.0 - alpha), 2)
-    return (ci_low, ci_high)
+    ci_low, ci_high = np.quantile(boot_means, [alpha, 1.0 - alpha])
+    return (round(float(ci_low), 2), round(float(ci_high), 2))
 
 
 def describe_sample(vals: List[float], n_boot: int = 2000) -> Dict[str, Any]:

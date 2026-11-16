@@ -139,8 +139,18 @@ def _filter_balanced_intersection(
     }
 
 
+def _price_list_cost(model_cfg: Dict[str, Any], input_tokens: int, output_tokens: int, thinking_tokens: int) -> float:
+    in_price = model_cfg.get("cost_per_1m_input_usd")
+    out_price = model_cfg.get("cost_per_1m_output_usd")
+    if in_price is None or out_price is None:
+        return 0.0
+    billed_out = output_tokens + max(0, thinking_tokens)
+    return round(input_tokens / 1_000_000.0 * float(in_price) + billed_out / 1_000_000.0 * float(out_price), 7)
+
+
 def _enrich_rows_with_ground_truth(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     queries_by_code = {q["code"]: q for q in fetch_all_queries()}
+    model_cfg_cache: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         r["domain"] = (queries_by_code.get(r.get("query_code", "")) or {}).get("domain") or "fintech"
         if "expected_escalation" not in r or r["expected_escalation"] is None:
@@ -153,14 +163,16 @@ def _enrich_rows_with_ground_truth(rows: List[Dict[str, Any]]) -> List[Dict[str,
                 r["expected_escalation"] = req if corr else (not req)
 
         m_id = str(r.get("model_id") or "")
-        m_cfg = get_model_config(m_id)
+        if m_id not in model_cfg_cache:
+            model_cfg_cache[m_id] = get_model_config(m_id)
+        m_cfg = model_cfg_cache[m_id]
         p_known = bool(m_cfg.get("price_known", False))
         r["price_known"] = p_known
         r["cost_unknown"] = not p_known
         r["is_free_tier"] = bool(m_cfg.get("is_free_tier", False))
         if p_known:
-            plist_cost = calculate_cost_usd(
-                m_id,
+            plist_cost = _price_list_cost(
+                m_cfg,
                 int(r.get("input_tokens") or 0),
                 int(r.get("output_tokens") or 0),
                 int(r.get("thinking_tokens") or 0),
@@ -569,7 +581,7 @@ def _generate_scientific_findings(
             "text": (
                 f"Найвищу фактичну повноту отримано для стратегії {best_p['prompt_code']} ({best_p['prompt_name_uk']}): "
                 f"FC = {best_p['fact_coverage_pct']}% (95% ДІ [{best_p['fact_coverage_ci95'][0]}%, {best_p['fact_coverage_ci95'][1]}%], n = {best_p['count']}), "
-                f"надійність формату = {best_p['format_compliance_pct']}% (валідний JSON-контракт = {best_p.get('contract_ok_rate_pct', 100.0)}%). "
+                f"відповідність формату = {best_p['format_compliance_pct']}% (валідний JSON-контракт = {best_p.get('contract_ok_rate_pct', 100.0)}%). "
                 f"Різниця відносно базової лінії {base_p['prompt_code']} (FC = {base_p['fact_coverage_pct']}%, n = {base_p['count']}) "
                 f"становить {diff_fc:+.1f} в.п. {p_stat_str}"
             ),

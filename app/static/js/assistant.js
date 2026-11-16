@@ -12,7 +12,7 @@ function populateAssistantControls() {
     const recommendedId = APP_STATE.latestAnalyticsData?.conclusion?.recommended_model_id;
     const prevModel = modelSel.value;
     modelSel.innerHTML = models.length
-        ? models.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('')
+        ? models.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}${routeTagText(m)}</option>`).join('')
         : '<option value="">Немає увімкнених моделей</option>';
     const preferred = [prevModel, recommendedId].find(id => id && models.some(m => m.id === id));
     if (preferred) modelSel.value = preferred;

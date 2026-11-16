@@ -202,7 +202,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                     <div class="card-box p-4">
                         <div class="text-sm font-semibold text-slate-900">Якість відповіді</div>
-                        <p class="text-sm text-slate-600 mt-1">За замовчуванням підсумок із трьох частин: повнота фактів (65%), схожість до еталонної відповіді (35%) і штраф 15 пунктів за галюцинації.</p>
+                        <p class="text-sm text-slate-600 mt-1">За замовчуванням підсумок із трьох частин: повнота фактів (65%), лексична близькість до еталонної відповіді (35%) і штраф 15 пунктів за галюцинації.</p>
                     </div>
                     <div class="card-box p-4">
                         <div class="text-sm font-semibold text-slate-900">Повнота фактів</div>
@@ -921,7 +921,7 @@
                                                 <th class="py-2.5 px-2 text-center">n</th>
                                                 <th class="py-2.5 px-2 text-center">Якість, % (95% ДІ)</th>
                                                 <th class="py-2.5 px-2 text-center">Повнота фактів, % (95% ДІ)</th>
-                                                <th class="py-2.5 px-2 text-center">Надійність формату, %</th>
+                                                <th class="py-2.5 px-2 text-center">Відповідність формату, %</th>
                                                 <th class="py-2.5 px-2 text-center">Галюц., %</th>
                                                 <th class="py-2.5 px-2 text-center">Передача оператору: F1 (пропуски)</th>
                                                 <th class="py-2.5 px-2 text-center">Час: Сер / Мед, мс</th>
@@ -1063,7 +1063,7 @@
                                                 <th class="py-2.5 px-2 text-center">Якість, % (95% ДІ)</th>
                                                 <th class="py-2.5 px-2 text-center">Повнота фактів, % (95% ДІ)</th>
                                                 <th class="py-2.5 px-2 text-center">Схожість до еталона, %</th>
-                                                <th class="py-2.5 px-2 text-center">Надійність формату, %</th>
+                                                <th class="py-2.5 px-2 text-center">Відповідність формату, %</th>
                                                 <th class="py-2.5 px-2 text-center">Галюц., %</th>
                                                 <th class="py-2.5 px-2 text-center">Рубрика (1-5)</th>
                                                 <th class="py-2.5 px-2 text-center">Час: Сер / Мед (P95), мс</th>
@@ -1423,20 +1423,20 @@
         <!-- Модальне вікно списку моделей обраного провайдера -->
         <div id="providerModelsModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[88vh] flex flex-col overflow-hidden border border-slate-300">
-                <div class="px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2 border-b border-slate-800">
-                    <div class="flex items-center gap-2.5">
-                        <span id="provModalIcon" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-200 flex items-center justify-center font-bold text-xs font-mono">API</span>
-                        <div>
-                            <h3 id="provModalTitle" class="font-bold text-sm text-white">Провайдер</h3>
-                            <div id="provModalSubtitle" class="text-[11px] text-slate-400 font-mono"></div>
+                <div class="px-5 py-3.5 bg-slate-900 text-white flex items-start justify-between gap-3 border-b border-slate-800">
+                    <div class="min-w-0 flex-1 space-y-2">
+                        <div class="flex items-center gap-2.5">
+                            <span id="provModalIcon" class="w-8 h-8 shrink-0 rounded-lg bg-slate-800 text-slate-200 flex items-center justify-center font-bold text-xs font-mono">API</span>
+                            <div class="min-w-0">
+                                <h3 id="provModalTitle" class="font-bold text-sm text-white">Провайдер</h3>
+                                <div id="provModalSubtitle" class="text-[11px] text-slate-400 font-mono break-words"></div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="flex items-center gap-2">
                         <div id="provModalRouteControl"></div>
-                        <button onclick="closeProviderModelsModal()" class="w-8 h-8 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-lg transition">
-                            &times;
-                        </button>
                     </div>
+                    <button onclick="closeProviderModelsModal()" class="w-8 h-8 shrink-0 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-lg transition">
+                        &times;
+                    </button>
                 </div>
 
                 <div class="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -1444,7 +1444,13 @@
                         <input id="provModalSearchInput" type="text" oninput="filterProviderModalModels()" placeholder="Пошук моделі за назвою або ID..." class="w-full max-w-xs border border-slate-300 rounded-lg px-2.5 py-1 text-xs bg-white">
                         <span id="provModalCountBadge" class="text-slate-600 font-medium whitespace-nowrap"></span>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <label class="flex items-center gap-1.5 text-slate-600">Порядок:
+                            <select id="provModalSortSelect" onchange="changeProviderModalSort(this.value)" class="border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white"></select>
+                        </label>
+                        <button id="provModalProbeAllBtn" onclick="probeProviderModels(APP_STATE.activeModalProviderId)" title="Запит до кожної моделі провайдера, включно з вимкненими. Витрачає частину добових лімітів." class="px-2.5 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 font-medium transition disabled:opacity-60">
+                            Перевірити всі моделі
+                        </button>
                         <button onclick="toggleAllModelsForCurrentProvider(true)" class="px-2.5 py-1 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium transition">
                             Увімкнути всі
                         </button>
@@ -1544,6 +1550,7 @@
 
         <!-- ВКЛАДКА: ЖУРНАЛ ПОДІЙ -->
         <section id="tab-logs" class="hidden space-y-4">
+            <div id="logsRunStatus" class="hidden card-box p-4 border border-slate-300"></div>
             <div class="card-box overflow-hidden border border-slate-400">
                 <div class="px-4 py-3 bg-slate-800 text-white flex flex-wrap items-center justify-between gap-2 text-xs">
                     <div class="flex items-center gap-2">

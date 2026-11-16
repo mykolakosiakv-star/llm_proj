@@ -224,7 +224,7 @@ def compute_decision_support(
         if winner_p:
             just_p = (
                 f"Стратегія «{winner_p['prompt_name_uk']}» забезпечує індекс {winner_p['deployment_score_pct']}% "
-                f"(FC = {winner_p['fact_coverage_pct']}%, надійність формату = {winner_p['format_compliance_pct']}%, "
+                f"(FC = {winner_p['fact_coverage_pct']}%, відповідність формату = {winner_p['format_compliance_pct']}%, "
                 f"точність шлюзу ескалації F1 = {winner_p['escalation_f1_pct']}%, пропуск ризиків FN = {winner_p['fn_rate_pct']}%)."
             )
 

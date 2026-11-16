@@ -116,11 +116,15 @@ async function probeApiLimits(options = {}) {
 
     setButton('Перевірка...');
     if (!silent) setProbeBanner('Перевірка запущена. Статуси оновлюються в міру отримання відповідей.');
+    APP_STATE.probingScope = options.model_key
+        ? { type: 'model', id: options.model_key }
+        : (options.provider ? { type: 'provider', id: options.provider } : { type: 'all' });
+    if (APP_STATE.activeModalProviderId) renderProviderModalListContent(APP_STATE.activeModalProviderId);
     try {
         const resp = await fetch('/api/models/status/refresh', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: options.model_key || null, only_enabled: onlyEnabled, force: true }),
+            body: JSON.stringify({ model_key: options.model_key || null, only_enabled: onlyEnabled, force: true, provider: options.provider || null }),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const snap = await waitForProbeToFinish(probe => setButton(describeProbeProgress(probe)));
@@ -134,8 +138,14 @@ async function probeApiLimits(options = {}) {
     } catch (e) {
         if (!silent) setProbeBanner(`Не вдалося запустити перевірку: ${e.message || e}`, true);
     } finally {
+        APP_STATE.probingScope = null;
         setButton(idleLabel);
+        if (APP_STATE.activeModalProviderId) renderProviderModalListContent(APP_STATE.activeModalProviderId);
     }
+}
+
+function probeProviderModels(providerId) {
+    return probeApiLimits({ silent: false, provider: providerId, only_enabled: false });
 }
 
 async function probeSingleModelStatus(modelKey) {

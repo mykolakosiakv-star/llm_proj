@@ -40,8 +40,16 @@ from app.services.model_discovery import (
 )
 
 
+OLLAMA_REQUEST_TIMEOUT_SECONDS = 600.0
+_TOKEN_LIMIT_RE = re.compile(r"Request too large.*?Limit (\d+), Requested \d+", re.S)
+
+
 class DailyQuotaExceededError(RuntimeError):
     """Виняток при вичерпанні добового ліміту або балансу для моделі."""
+
+
+class ModelAccessError(RuntimeError):
+    """Ключ відхилено (401/403): модель у цій серії більше не відповість."""
 
 
 class ProviderUnavailableError(DailyQuotaExceededError):
@@ -245,7 +253,12 @@ def _handle_http_failure(
         log_event(stage=f"LLM <- {provider_label}", message=full_msg, level="ERROR")
         raise DailyQuotaExceededError(full_msg)
 
-    if resp.status_code in (429, 503, 529) and attempt < max_attempts:
+    if resp.status_code in (401, 403):
+        full_msg = f"Доступ відхилено ({provider_label} / {model_name}): {msg}"
+        log_event(stage=f"LLM <- {provider_label}", message=full_msg, level="ERROR")
+        raise ModelAccessError(full_msg)
+
+    if resp.status_code in (429, 500, 502, 503, 504, 529) and attempt < max_attempts:
         wait_sec = REQUEST_SCHEDULER.compute_backoff_delay(attempt, dict(resp.headers), raw_text)
         log_event(
             stage=f"LLM <- {provider_label}",
@@ -330,6 +343,16 @@ async def call_openai_compatible_api(
             payload.pop("response_format", None)
             payload.pop("reasoning_effort", None)
             continue
+        if resp.status_code == 429:
+            too_large = _TOKEN_LIMIT_RE.search(resp.text or "")
+            if too_large and int(too_large.group(1)) < payload["max_tokens"]:
+                payload["max_tokens"] = effective_max_tokens = int(too_large.group(1))
+                log_event(
+                    stage=f"LLM <- {provider_label}",
+                    message=f"Ліміт токенів за хвилину для {model_name} менший за запит: max_tokens зменшено до {payload['max_tokens']}.",
+                    level="WARN",
+                )
+                continue
         if resp.status_code >= 400:
             wait_sec = _handle_http_failure(
                 provider_code, provider_label, model_id, model_name, resp, call_ms, attempt
@@ -353,8 +376,9 @@ async def call_openai_compatible_api(
         raw_out = usage.get("completion_tokens")
         tokens_estimated = (raw_in is None) or (raw_out is None)
         in_tok = int(raw_in) if raw_in is not None else estimate_tokens(system_prompt + user_prompt)
-        out_tok = int(raw_out) if raw_out is not None else estimate_tokens(answer_text)
         thinking_tok = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        # у цьому форматі completion_tokens уже містить токени міркувань: віднімаємо, щоб не оплатити їх двічі
+        out_tok = max(0, int(raw_out) - thinking_tok) if raw_out is not None else estimate_tokens(answer_text)
 
         log_event(
             stage=f"LLM <- {provider_label}",
@@ -372,6 +396,8 @@ async def call_openai_compatible_api(
             "thinking_tokens": thinking_tok,
             "tokens_estimated": tokens_estimated,
             "raw_usage_json": json.dumps(usage, ensure_ascii=False),
+            # OpenRouter повертає фактично списану суму: вона точніша за розрахунок за прайсом
+            "billed_cost_usd": usage.get("cost"),
             "finish_reason": finish_reason,
             "truncated": truncated,
             "temperature": temperature,
@@ -615,7 +641,7 @@ async def call_ollama_api(
         "options": options,
     }
     call_t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS) as client:
         resp = await client.post(url, json=payload)
         call_ms = round((time.perf_counter() - call_t0) * 1000.0, 1)
         if resp.status_code >= 400:
@@ -717,7 +743,7 @@ def alternate_route(model_id: str, current: str, settings: Optional[Dict[str, An
         settings = load_runtime_settings()
     cfg = get_model_config(model_id)
     provider = cfg.get("provider", "")
-    if provider in ("ollama", "gemini", "openrouter", "custom"):
+    if provider in ("ollama", "openrouter", "custom"):
         return None
     if current == ROUTE_NATIVE:
         if can_route_via_openrouter(model_id) and settings.get("openrouter_api_key"):
@@ -811,9 +837,9 @@ async def _call_native(
                 seed=seed_val,
                 model_id=model_id,
             )
-        except Exception as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             raise ProviderUnavailableError(
-                f"Локальний сервер Ollama ({ollama_url}) недоступний: {exc}",
+                f"Локальний сервер Ollama ({ollama_url}) недоступний: {exc!r}",
                 model_id,
                 ROUTE_NATIVE,
                 "offline",
@@ -898,8 +924,9 @@ async def execute_llm_request(
     route = resolve_route(model_id, settings)
     provider_label = "OPENROUTER" if route == ROUTE_OPENROUTER else model_cfg["provider"].upper()
 
-    rpm_limit = model_cfg.get("rpm")
-    rpd_limit = model_cfg.get("rpd")
+    # лимиты RPM/RPD в реестре относятся к прямому API провайдера, у OpenRouter свои
+    rpm_limit = None if route == ROUTE_OPENROUTER else model_cfg.get("rpm")
+    rpd_limit = None if route == ROUTE_OPENROUTER else model_cfg.get("rpd")
     await REQUEST_SCHEDULER.acquire_rpm_slot(f"{provider_label}:{model_id}", rpm_limit)
     REQUEST_SCHEDULER.check_and_reserve_rpd(model_id, rpd_limit)
 
@@ -932,9 +959,13 @@ async def execute_llm_request(
     res["route"] = route
     price_known = bool(model_cfg.get("price_known", False))
     res["cost_unknown"] = not price_known
-    res["cost_usd"] = calculate_cost_usd(
-        model_id, res["input_tokens"], res["output_tokens"], res.get("thinking_tokens", 0)
-    )
+    billed = res.pop("billed_cost_usd", None)
+    if isinstance(billed, (int, float)) and price_known:
+        res["cost_usd"] = round(float(billed), 7)
+    else:
+        res["cost_usd"] = calculate_cost_usd(
+            model_id, res["input_tokens"], res["output_tokens"], res.get("thinking_tokens", 0)
+        )
     if not price_known:
         try:
             usage_obj = json.loads(res.get("raw_usage_json") or "{}")

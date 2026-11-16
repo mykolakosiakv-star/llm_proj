@@ -16,7 +16,6 @@ from typing import Dict, Any, List, Optional, Tuple
 from app.config import (
     DEFAULT_MODELS_CATALOG,
     QUERY_CATEGORIES,
-    ROUTE_NATIVE,
     ROUTE_OPENROUTER,
     DEFAULT_TOP_K,
     load_runtime_settings,
@@ -39,6 +38,7 @@ from app.services.retrieval import resolve_experiment_context
 from app.services.llm_runtime import (
     execute_llm_request,
     DailyQuotaExceededError,
+    ModelAccessError,
     set_session_route,
     clear_session_routes,
     resolve_route,
@@ -141,13 +141,10 @@ async def _generate_with_contract_retry(
 
 def _is_model_unusable_error(exc: Exception) -> bool:
     """Ошибка означает, что модель в этой серии больше не ответит: лимит, нет ключа или отказ в доступе."""
-    text = str(exc)
-    return (
-        isinstance(exc, DailyQuotaExceededError)
-        or "не вказано" in text
-        or "401" in text
-        or "вичерпано добовий" in text.lower()
-    )
+    # тимчасові збої (ліміт за хвилину, немає зв'язку) модель не вимикають: їх рахує лічильник помилок поспіль
+    if getattr(exc, "reason", None) in ("rate_limited", "offline"):
+        return False
+    return isinstance(exc, (DailyQuotaExceededError, ModelAccessError))
 
 
 def _quota_fields(quota_skipped: Dict[str, str]) -> Dict[str, Any]:
@@ -810,6 +807,253 @@ def _create_batch_run_record(
     }
 
 
+# Сколько ошибок подряд терпим, прежде чем остановить модель или судью до следующего «Довиконати»
+MAX_CONSECUTIVE_MODEL_ERRORS = 5
+MAX_CONSECUTIVE_JUDGE_ERRORS = 5
+JUDGE_ATTEMPTS = 2
+_LOCAL_MODEL_LOCK = asyncio.Lock()
+
+
+async def _judge_cell(state: Dict[str, Any], q: Dict[str, Any], answer: str, model_id: str) -> Optional[Dict[str, Any]]:
+    """Оценка судьёй без участия человека: при сбое замер сохраняется без оценки и дооценивается позже."""
+    if not state["judge_on"]:
+        return None
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, JUDGE_ATTEMPTS + 1):
+        try:
+            res = await evaluate_with_rubric_judge(
+                user_query=q["user_query"],
+                context_fact=q["context_fact"],
+                reference_answer=q["reference_answer"],
+                expected_escalation=q["expected_escalation"],
+                generated_answer=answer,
+                evaluated_model_id=model_id,
+                judge_model_id=state["judge_model"],
+                allow_self_judge=state["allow_self_judge"],
+            )
+            state["judge_streak"] = 0
+            return res
+        except Exception as exc:
+            last_exc = exc
+            if _is_model_unusable_error(exc):
+                break
+            if attempt < JUDGE_ATTEMPTS:
+                await asyncio.sleep(10.0)
+    state["judge_streak"] += 1
+    state["judge_failures"] += 1
+    log_event(
+        "СУДДЯ [ПОМИЛКА]",
+        f"Суддя {state['judge_model']} не оцінив відповідь {q['code']} ({model_id}): {last_exc}. Замір збережено без оцінки, його можна дооцінити пізніше.",
+        level="WARN",
+    )
+    if _is_model_unusable_error(last_exc) or state["judge_streak"] >= MAX_CONSECUTIVE_JUDGE_ERRORS:
+        state["judge_on"] = False
+        log_event(
+            "СУДДЯ [ВИМКНЕНО]",
+            f"Суддю {state['judge_model']} вимкнено до кінця цього запуску. Решту замірів дооцініть кнопкою «Дооцінити суддею».",
+            level="ERROR",
+        )
+    return None
+
+
+async def _run_series_cells(
+    run_id: int,
+    selected_queries: List[Dict[str, Any]],
+    modes: List[str],
+    prompt_codes: List[str],
+    model_ids: List[str],
+    repeats: int,
+    total_items: int,
+    existing_cells: set,
+    eff_temp: float,
+    eff_max_tokens: int,
+    eff_seed: int,
+    eff_top_k: int,
+    run_domain: str,
+    judge_model: str,
+    allow_self_judge: bool,
+    now_str: str,
+) -> Dict[str, Any]:
+    """Выполняет недостающие замеры серии. Модели идут параллельно, каждая своей задачей и по порядку,
+    поэтому медленная или остановленная лимитом модель не задерживает остальные."""
+    state: Dict[str, Any] = {
+        "completed": len(existing_cells),
+        "errors": 0,
+        "last_error": "",
+        "quota_skipped": {},
+        "judge_on": bool(judge_model),
+        "judge_model": judge_model,
+        "allow_self_judge": allow_self_judge,
+        "judge_streak": 0,
+        "judge_failures": 0,
+    }
+    conn = get_connection()
+    cur = conn.cursor()
+    packs: Dict[Tuple[str, str, str], Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+    contexts: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def get_pack(q: Dict[str, Any], ctx_mode: str, p_code: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        q_domain = str(q.get("domain") or run_domain or "fintech")
+        ctx_key = (q["code"], ctx_mode)
+        if ctx_key not in contexts:
+            contexts[ctx_key] = resolve_experiment_context(query_item=q, context_mode=ctx_mode, domain=q_domain, top_k=eff_top_k)
+        key = (q["code"], ctx_mode, p_code)
+        if key not in packs:
+            cat_info = QUERY_CATEGORIES.get(q["category"], QUERY_CATEGORIES["informational"])
+            packs[key] = (
+                contexts[ctx_key],
+                build_prompt_messages(
+                    prompt_code=p_code,
+                    user_query=q["user_query"],
+                    context_fact=contexts[ctx_key]["prompt_context"],
+                    category_code=q["category"],
+                    category_name_uk=cat_info["name_uk"],
+                    exclude_query_code=q["code"],
+                    domain=q_domain,
+                ),
+            )
+        return packs[key]
+
+    def stop_model(m_id: str, reason: str) -> None:
+        state["quota_skipped"][m_id] = reason[:240]
+        log_event(
+            "ЕКСПЕРИМЕНТ [ПРОПУСК МОДЕЛІ]",
+            f"Модель {m_id} зупинено в цьому запуску: {reason[:200]}. Решта моделей продовжують роботу, серію можна довиконати пізніше.",
+            level="WARN",
+        )
+
+    async def run_model(m_id: str) -> None:
+        model_cfg = get_model_config(m_id)
+        is_local = model_cfg.get("provider") == "ollama"
+        error_streak = 0
+        cells = (
+            (q, ctx_mode, p_code, rep)
+            for q in selected_queries for ctx_mode in modes for p_code in prompt_codes for rep in range(1, repeats + 1)
+        )
+        for q, ctx_mode, p_code, rep in cells:
+            if is_cancel_requested():
+                return
+            cell_key = (q["code"], m_id, p_code, rep, ctx_mode)
+            if cell_key in existing_cells:
+                continue
+            ctx_info, prompt_pack = get_pack(q, ctx_mode, p_code)
+            update_runtime_status(
+                is_busy=True,
+                operation_type="batch_experiment",
+                stage_number=4,
+                current_stage=f"Замір {state['completed'] + 1}/{total_items}: {q['code']} | {model_cfg['name']} | {p_code} | {ctx_mode}",
+                active_query_code=q["code"],
+                active_query_text=q["user_query"][:85],
+                progress_current=state["completed"],
+                progress_total=total_items,
+            )
+            try:
+                generate = _generate_with_contract_retry(
+                    model_id=m_id,
+                    prompt_code=p_code,
+                    system_prompt=prompt_pack["system_prompt"],
+                    user_prompt=prompt_pack["user_prompt"],
+                    temperature=eff_temp,
+                    max_output_tokens=eff_max_tokens,
+                    seed=eff_seed + (rep - 1),
+                )
+                if is_local:
+                    # локальные модели делят один процессор: по одной за раз
+                    async with _LOCAL_MODEL_LOCK:
+                        llm_out, parsed_contract = await generate
+                else:
+                    llm_out, parsed_contract = await generate
+            except Exception as item_exc:
+                err_text = str(item_exc) or repr(item_exc)
+                state["errors"] += 1
+                state["last_error"] = err_text
+                log_run_error(
+                    run_id=run_id, query_code=q["code"], model_id=m_id, prompt_code=p_code,
+                    repeat_index=rep, error_type=type(item_exc).__name__, message=err_text,
+                )
+                log_event(
+                    "ЕКСПЕРИМЕНТ [ПОМИЛКА]",
+                    f"Помилка на запиті {q['code']} ({m_id}, {p_code}, {ctx_mode}, повтор {rep}): {err_text}",
+                    level="ERROR",
+                )
+                if _is_model_unusable_error(item_exc):
+                    stop_model(m_id, err_text)
+                    return
+                error_streak += 1
+                if error_streak >= MAX_CONSECUTIVE_MODEL_ERRORS:
+                    stop_model(m_id, f"{MAX_CONSECUTIVE_MODEL_ERRORS} помилок поспіль, остання: {err_text}")
+                    return
+                continue
+            error_streak = 0
+
+            judge_res = await _judge_cell(state, q, parsed_contract["answer"], m_id)
+            metrics = evaluate_response_comprehensive(
+                generated_answer=parsed_contract["answer"],
+                reference_answer=q["reference_answer"],
+                required_keywords=q["required_keywords"],
+                expected_escalation=q["expected_escalation"],
+                prompt_code=p_code,
+                latency_ms=llm_out["latency_ms"],
+                context_fact=q["context_fact"],
+                user_query=q["user_query"],
+                judge_result=judge_res,
+                parsed_contract=parsed_contract,
+            )
+            # между вставкой и commit нет await, поэтому задачи разных моделей не пересекаются в одной транзакции
+            _insert_evaluation_record(
+                cur=cur, run_id=run_id, query_id=q["id"], query_code=q["code"], category=q["category"],
+                prompt_pack=prompt_pack, model_id=m_id, repeat_index=rep, llm_out=llm_out, metrics=metrics,
+                source="batch", judge_result=judge_res, created_at=now_str, context_info=ctx_info,
+            )
+            existing_cells.add(cell_key)
+            state["completed"] += 1
+            cur.execute("UPDATE experiment_runs SET completed_items = ? WHERE id = ?", (state["completed"], run_id))
+            conn.commit()
+            log_event(
+                "ЕКСПЕРИМЕНТ [ЗАМІР]",
+                (
+                    f"[{state['completed']}/{total_items}] {q['code']} | {m_id} | {p_code} | {ctx_mode} -> "
+                    f"FC={metrics['fact_coverage_pct']}%, Q_det={metrics['integral_efficiency_pct']}%, Час={llm_out['latency_ms']} мс"
+                ),
+                level="EVAL",
+            )
+
+    try:
+        results = await asyncio.gather(*(run_model(m) for m in model_ids), return_exceptions=True)
+        for m_id, res in zip(model_ids, results):
+            if isinstance(res, Exception):
+                state["errors"] += 1
+                state["last_error"] = repr(res)
+                stop_model(m_id, f"внутрішня помилка: {res!r}")
+    finally:
+        clear_active_prompt()
+        conn.close()
+    return state
+
+
+def _final_series_status(state: Dict[str, Any], total_items: int) -> str:
+    if is_cancel_requested():
+        return "cancelled"
+    if state["completed"] >= total_items:
+        return "completed"
+    if state["quota_skipped"]:
+        return "paused_quota"
+    return "failed" if state["completed"] == 0 else "incomplete"
+
+
+def _save_series_status(run_id: int, state: Dict[str, Any], total_items: int) -> None:
+    conn = get_connection()
+    conn.execute(
+        "UPDATE experiment_runs SET completed_items = ?, status = ?, summary_json = ? WHERE id = ?",
+        (
+            state["completed"], _final_series_status(state, total_items),
+            json.dumps(_quota_fields(state["quota_skipped"]), ensure_ascii=False), run_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
     run_id = int(run_ctx["run_id"])
     title = run_ctx["title"]
@@ -850,358 +1094,21 @@ async def _run_batch_experiment_loop(run_ctx: Dict[str, Any]) -> Dict[str, Any]:
         cancel_requested=False,
     )
 
-    conn = get_connection()
-    cur = conn.cursor()
-    completed = 0
-    errors_count = 0
-    disabled_models = set()
-    quota_skipped: Dict[str, str] = {}
-    last_fatal_error = ""
-    early_ended = False
-    active_judge_model = judge_model_id or str(settings.get("judge_model", "gemini-2.5-flash"))
-    active_judge = bool(judge_model_id) or bool(use_judge)
-    if active_judge:
-        log_event(
-            "СУДДЯ [АКТИВОВАНО]",
-            f"Оцінювання за рубрикою виконує LLM-суддя: {active_judge_model}",
-            level="STEP",
-        )
+    judge_model = (judge_model_id or str(settings.get("judge_model", ""))) if use_judge else ""
+    if judge_model:
+        log_event("СУДДЯ [АКТИВОВАНО]", f"Оцінювання за рубрикою виконує LLM-суддя: {judge_model}", level="STEP")
 
-    try:
-        for q in selected_queries:
-            if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                break
-            cat_info = QUERY_CATEGORIES.get(q["category"], QUERY_CATEGORIES["informational"])
-            q_domain = str(q.get("domain") or (eff_domain.split(",")[0] if eff_domain else "fintech") or "fintech")
-            for ctx_mode in modes:
-                if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                    break
-                ctx_info = resolve_experiment_context(
-                    query_item=q,
-                    context_mode=ctx_mode,
-                    domain=q_domain,
-                    top_k=eff_top_k,
-                )
-                for p_code in prompt_codes:
-                    if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                        break
-                    prompt_pack = build_prompt_messages(
-                        prompt_code=p_code,
-                        user_query=q["user_query"],
-                        context_fact=ctx_info["prompt_context"],
-                        category_code=q["category"],
-                        category_name_uk=cat_info["name_uk"],
-                        exclude_query_code=q["code"],
-                        domain=q_domain,
-                    )
-                    for m_id in model_ids:
-                        if early_ended:
-                            break
-                        if m_id in disabled_models:
-                            for rep_skip in range(1, repeats + 1):
-                                log_run_error(
-                                    run_id=run_id,
-                                    query_code=q["code"],
-                                    model_id=m_id,
-                                    prompt_code=p_code,
-                                    repeat_index=rep_skip,
-                                    error_type="QuotaSkipped",
-                                    message=f"Пропущено через попередню відмову квоти/ключа моделі {m_id}",
-                                )
-                            continue
-                        if is_cancel_requested():
-                            break
-                        model_cfg = get_model_config(m_id)
-                        for rep in range(1, repeats + 1):
-                            if is_cancel_requested() or early_ended or m_id in disabled_models:
-                                break
-
-                            step_idx = completed + 1
-                            rep_seed = eff_seed + (rep - 1) if eff_seed is not None else None
-                            update_runtime_status(
-                                is_busy=True,
-                                operation_type="batch_experiment",
-                                stage_number=4,
-                                current_stage=(
-                                    f"Замір {step_idx}/{total_items}: {q['code']} | {model_cfg['name']} | "
-                                    f"{p_code} | {ctx_mode}"
-                                ),
-                                active_model=model_cfg["name"],
-                                active_provider=model_cfg.get("provider", "api").upper(),
-                                active_prompt=p_code,
-                                active_query_code=q["code"],
-                                active_query_text=q["user_query"][:85],
-                                progress_current=completed,
-                                progress_total=total_items,
-                            )
-
-                            try:
-                                llm_out = None
-                                parsed_contract = None
-                                while True:
-                                    try:
-                                        llm_out, parsed_contract = await _generate_with_contract_retry(
-                                            model_id=m_id,
-                                            prompt_code=p_code,
-                                            system_prompt=prompt_pack["system_prompt"],
-                                            user_prompt=prompt_pack["user_prompt"],
-                                            temperature=eff_temp,
-                                            max_output_tokens=eff_max_tokens,
-                                            seed=rep_seed,
-                                        )
-                                        break
-                                    except Exception as p_err:
-                                        alt = getattr(p_err, "alt_route", None)
-                                        cur_route = getattr(p_err, "route", resolve_route(m_id, settings))
-                                        alt_label = "OpenRouter" if alt == ROUTE_OPENROUTER else "Прямий API"
-                                        cur_label = "Прямий API" if cur_route == ROUTE_NATIVE else "OpenRouter"
-                                        prompt_id = f"route_{m_id}_{int(time.time()*1000)}"
-                                        options = [
-                                            {
-                                                "action": "wait_retry",
-                                                "label": "Зачекати 20 сек і повторити запит до цієї моделі",
-                                                "primary": True,
-                                            }
-                                        ]
-                                        if alt:
-                                            options.append({
-                                                "action": "switch_route",
-                                                "label": f"Перемкнути маршрут на {alt_label} на час експерименту",
-                                                "primary": True,
-                                            })
-                                        options.extend([
-                                            {
-                                                "action": "skip_model",
-                                                "label": f"Пропустити модель {model_cfg['name']} у поточній серії",
-                                            },
-                                            {
-                                                "action": "abort_run",
-                                                "label": "Зупинити експеримент (зберегти вже виконані заміри)",
-                                            },
-                                        ])
-                                        decision = await wait_for_user_decision(
-                                            prompt_id=prompt_id,
-                                            prompt_type="model_route_failed",
-                                            title=f"Помилка або таймаут моделі {model_cfg['name']}",
-                                            message=(
-                                                f"Під час запиту {q['code']} до моделі {model_cfg['name']} (маршрут: {cur_label}) "
-                                                f"виникла помилка: {p_err}. Оберіть дію для продовження експерименту:"
-                                            ),
-                                            options=options,
-                                            extra_context={"model_id": m_id, "failed_route": cur_route, "target_route": alt},
-                                            timeout_seconds=120.0,
-                                        )
-                                        act = (decision or {}).get("action")
-                                        if act == "wait_retry":
-                                            log_event(
-                                                "ЕКСПЕРИМЕНТ [ОЧІКУВАННЯ]",
-                                                f"Користувач обрав зачекати 20 сек і повторити запит для моделі {model_cfg['name']}...",
-                                                level="STEP",
-                                            )
-                                            await asyncio.sleep(20.0)
-                                            continue
-                                        elif act == "switch_route" and alt:
-                                            set_session_route(m_id, alt)
-                                            log_event(
-                                                "ЕКСПЕРИМЕНТ [ЗМІНА МАРШРУТУ]",
-                                                f"Маршрут {m_id} тимчасово перемкнуто на {alt_label}.",
-                                                level="STEP",
-                                            )
-                                            continue
-                                        elif act == "abort_run":
-                                            early_ended = True
-                                            break
-                                        else:
-                                            disabled_models.add(m_id)
-                                            raise
-
-                                if early_ended or llm_out is None or parsed_contract is None:
-                                    break
-
-                                judge_res = None
-                                if active_judge:
-                                    while active_judge:
-                                        try:
-                                            update_runtime_status(
-                                                stage_number=5,
-                                                current_stage=f"Оцінювання відповіді LLM-суддею ({active_judge_model}): замір {step_idx}/{total_items}",
-                                            )
-                                            judge_res = await evaluate_with_rubric_judge(
-                                                user_query=q["user_query"],
-                                                context_fact=q["context_fact"],
-                                                reference_answer=q["reference_answer"],
-                                                expected_escalation=q["expected_escalation"],
-                                                generated_answer=parsed_contract["answer"],
-                                                evaluated_model_id=m_id,
-                                                judge_model_id=active_judge_model,
-                                                allow_self_judge=allow_self_judge,
-                                            )
-                                            break
-                                        except Exception as j_exc:
-                                            prompt_id = f"judge_{int(time.time()*1000)}"
-                                            options = [
-                                                {
-                                                    "action": "wait_retry",
-                                                    "label": f"Зачекати 20 сек і повторити оцінку суддею ({active_judge_model})",
-                                                    "primary": True,
-                                                }
-                                            ]
-                                            j_alt = alternate_route(active_judge_model, resolve_route(active_judge_model, settings), settings)
-                                            if j_alt:
-                                                j_alt_label = "OpenRouter" if j_alt == ROUTE_OPENROUTER else "Прямий API"
-                                                options.append({
-                                                    "action": "switch_judge_route",
-                                                    "target_route": j_alt,
-                                                    "label": f"Перемкнути суддю ({active_judge_model}) на {j_alt_label}",
-                                                    "primary": True,
-                                                })
-                                            if active_judge_model != "gemini-2.5-flash" and settings.get("gemini_api_key"):
-                                                options.append({
-                                                    "action": "switch_judge_model",
-                                                    "target_model": "gemini-2.5-flash",
-                                                    "label": "Змінити суддю на Google Gemini 2.5 Flash (1500 RPD)",
-                                                    "primary": True,
-                                                })
-                                            options.append({
-                                                "action": "end_early",
-                                                "label": f"Завершити експеримент достроково (зберегти {completed} замірів, оцінених ШІ)",
-                                            })
-                                            options.append({
-                                                "action": "heuristic_fallback",
-                                                "label": "Продовжити без ШІ-судді (решту можна дооцінити пізніше кнопкою Дооцінити суддею)",
-                                            })
-
-                                            decision = await wait_for_user_decision(
-                                                prompt_id=prompt_id,
-                                                prompt_type="judge_failed",
-                                                title="Збій або ліміт моделі-судді",
-                                                message=f"Модель-суддя {active_judge_model} не змогла оцінити відповідь: {j_exc}. Оберіть дію:",
-                                                options=options,
-                                                extra_context={"current_judge": active_judge_model, "completed_items": completed},
-                                                timeout_seconds=120.0,
-                                            )
-                                            j_act = (decision or {}).get("action")
-                                            if j_act == "wait_retry":
-                                                await asyncio.sleep(20.0)
-                                                continue
-                                            elif j_act == "end_early":
-                                                early_ended = True
-                                                break
-                                            elif j_act == "switch_judge_route" and j_alt:
-                                                set_session_route(active_judge_model, j_alt)
-                                                continue
-                                            elif j_act == "switch_judge_model":
-                                                new_jm = (decision.get("data") or {}).get("target_model") or "gemini-2.5-flash"
-                                                active_judge_model = new_jm
-                                                continue
-                                            else:
-                                                active_judge = False
-                                                break
-
-                                if early_ended:
-                                    break
-
-                                metrics = evaluate_response_comprehensive(
-                                    generated_answer=parsed_contract["answer"],
-                                    reference_answer=q["reference_answer"],
-                                    required_keywords=q["required_keywords"],
-                                    expected_escalation=q["expected_escalation"],
-                                    prompt_code=p_code,
-                                    latency_ms=llm_out["latency_ms"],
-                                    context_fact=q["context_fact"],
-                                    user_query=q["user_query"],
-                                    judge_result=judge_res,
-                                    parsed_contract=parsed_contract,
-                                )
-
-                                _insert_evaluation_record(
-                                    cur=cur,
-                                    run_id=run_id,
-                                    query_id=q["id"],
-                                    query_code=q["code"],
-                                    category=q["category"],
-                                    prompt_pack=prompt_pack,
-                                    model_id=m_id,
-                                    repeat_index=rep,
-                                    llm_out=llm_out,
-                                    metrics=metrics,
-                                    source="batch",
-                                    judge_result=judge_res,
-                                    created_at=now_str,
-                                    context_info=ctx_info,
-                                )
-                                completed += 1
-                                cur.execute(
-                                    "UPDATE experiment_runs SET completed_items = ? WHERE id = ?",
-                                    (completed, run_id),
-                                )
-                                conn.commit()
-
-                                log_event(
-                                    "ЕКСПЕРИМЕНТ [ЗАМІР]",
-                                    (
-                                        f"[{completed}/{total_items}] {q['code']} | {m_id} | {p_code} | {ctx_mode} -> "
-                                        f"FC={metrics['fact_coverage_pct']}%, Q_det={metrics['integral_efficiency_pct']}%, "
-                                        f"Час={llm_out['latency_ms']} мс"
-                                    ),
-                                    level="EVAL",
-                                )
-                                if total_items > 3 and not is_cancel_requested():
-                                    await asyncio.sleep(1.5)
-
-                            except Exception as item_exc:
-                                errors_count += 1
-                                err_text = str(item_exc)
-                                last_fatal_error = err_text
-                                err_type = type(item_exc).__name__
-                                log_run_error(
-                                    run_id=run_id,
-                                    query_code=q["code"],
-                                    model_id=m_id,
-                                    prompt_code=p_code,
-                                    repeat_index=rep,
-                                    error_type=err_type,
-                                    message=err_text,
-                                )
-                                log_event(
-                                    "ЕКСПЕРИМЕНТ [ПОМИЛКА]",
-                                    f"Помилка на запиті {q['code']} ({m_id}, {p_code}, {ctx_mode}, повтор {rep}): {err_text}",
-                                    level="ERROR",
-                                )
-                                if _is_model_unusable_error(item_exc):
-                                    disabled_models.add(m_id)
-                                    if isinstance(item_exc, DailyQuotaExceededError):
-                                        quota_skipped[m_id] = err_text[:240]
-                                    log_event(
-                                        "ЕКСПЕРИМЕНТ [ПРОПУСК МОДЕЛІ]",
-                                        f"Модель «{model_cfg['name']}» ({m_id}) виключено з поточної серії через ліміт квоти або відсутність ключа. Решта моделей продовжують роботу.",
-                                        level="WARN",
-                                    )
-                                    if len(disabled_models) >= len(model_ids):
-                                        break
-
-        if is_cancel_requested():
-            final_status = "cancelled"
-        elif early_ended and completed > 0:
-            final_status = "completed"
-            cur.execute("UPDATE experiment_runs SET total_items = ? WHERE id = ?", (completed, run_id))
-        elif completed == 0:
-            final_status = "failed"
-        elif completed < total_items:
-            final_status = "incomplete"
-        else:
-            final_status = "completed"
-        if quota_skipped and final_status in ("failed", "incomplete"):
-            final_status = "paused_quota"
-
-        cur.execute(
-            "UPDATE experiment_runs SET completed_items = ?, status = ?, summary_json = ? WHERE id = ?",
-            (completed, final_status, json.dumps(_quota_fields(quota_skipped), ensure_ascii=False), run_id),
-        )
-        conn.commit()
-    finally:
-        clear_active_prompt()
-        conn.close()
+    state = await _run_series_cells(
+        run_id=run_id, selected_queries=selected_queries, modes=modes, prompt_codes=prompt_codes,
+        model_ids=model_ids, repeats=repeats, total_items=total_items, existing_cells=set(),
+        eff_temp=eff_temp, eff_max_tokens=eff_max_tokens, eff_seed=eff_seed, eff_top_k=eff_top_k,
+        run_domain=(eff_domain.split(",")[0] if eff_domain else "fintech"),
+        judge_model=judge_model, allow_self_judge=allow_self_judge, now_str=now_str,
+    )
+    _save_series_status(run_id, state, total_items)
+    completed = state["completed"]
+    quota_skipped = state["quota_skipped"]
+    last_fatal_error = state["last_error"]
 
     if completed == 0:
         reset_runtime_status(f"Серію #{run_id} завершено зі статусом failed: {last_fatal_error or '0 виконаних замірів'}")
@@ -1422,232 +1329,18 @@ async def resume_batch_experiment(
         level="STEP",
     )
 
-    disabled_models = set()
-    quota_skipped: Dict[str, str] = {}
-    early_ended = False
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-        for q in selected_queries:
-            if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                break
-            cat_info = QUERY_CATEGORIES.get(q["category"], QUERY_CATEGORIES["informational"])
-            for ctx_mode in modes:
-                if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                    break
-                ctx_info = None
-                for p_code in prompt_codes:
-                    if is_cancel_requested() or early_ended or len(disabled_models) >= len(model_ids):
-                        break
-                    prompt_pack = None
-                    for m_id in model_ids:
-                        if early_ended or is_cancel_requested() or m_id in disabled_models:
-                            continue
-                        model_cfg = get_model_config(m_id)
-                        for rep in range(1, repeats + 1):
-                            if is_cancel_requested() or early_ended or m_id in disabled_models:
-                                break
-                            cell_key = (q["code"], m_id, p_code, rep, ctx_mode)
-                            if cell_key in existing_cells:
-                                continue
-
-                            if ctx_info is None:
-                                ctx_info = resolve_experiment_context(
-                                    query_item=q,
-                                    context_mode=ctx_mode,
-                                    domain=str(q.get("domain") or run_domain),
-                                    top_k=eff_top_k,
-                                )
-                            if prompt_pack is None:
-                                prompt_pack = build_prompt_messages(
-                                    prompt_code=p_code,
-                                    user_query=q["user_query"],
-                                    context_fact=ctx_info["prompt_context"],
-                                    category_code=q["category"],
-                                    category_name_uk=cat_info["name_uk"],
-                                    exclude_query_code=q["code"],
-                                    domain=str(q.get("domain") or run_domain),
-                                )
-
-                            step_idx = completed + 1
-                            rep_seed = eff_seed + (rep - 1) if eff_seed is not None else None
-                            update_runtime_status(
-                                is_busy=True,
-                                operation_type="batch_experiment",
-                                stage_number=4,
-                                current_stage=f"Довиконання заміру {step_idx}/{total_items}: Запит {q['code']} | {model_cfg['name']} | {p_code} | {ctx_mode}",
-                                active_model=model_cfg["name"],
-                                active_provider=model_cfg.get("provider", "api").upper(),
-                                active_prompt=p_code,
-                                active_query_code=q["code"],
-                                active_query_text=q["user_query"][:85],
-                                progress_current=completed,
-                                progress_total=total_items,
-                            )
-
-                            try:
-                                llm_out = None
-                                parsed_contract = None
-                                while True:
-                                    try:
-                                        llm_out, parsed_contract = await _generate_with_contract_retry(
-                                            model_id=m_id,
-                                            prompt_code=p_code,
-                                            system_prompt=prompt_pack["system_prompt"],
-                                            user_prompt=prompt_pack["user_prompt"],
-                                            temperature=eff_temp,
-                                            max_output_tokens=eff_max_tokens,
-                                            seed=rep_seed,
-                                        )
-                                        break
-                                    except Exception as p_err:
-                                        alt = getattr(p_err, "alt_route", None)
-                                        cur_route = getattr(p_err, "route", resolve_route(m_id, settings))
-                                        alt_label = "OpenRouter" if alt == ROUTE_OPENROUTER else "Прямий API"
-                                        cur_label = "Прямий API" if cur_route == ROUTE_NATIVE else "OpenRouter"
-                                        prompt_id = f"resume_route_{m_id}_{int(time.time()*1000)}"
-                                        options = [
-                                            {
-                                                "action": "wait_retry",
-                                                "label": "Зачекати 20 сек і повторити запит до цієї моделі",
-                                                "primary": True,
-                                            }
-                                        ]
-                                        if alt:
-                                            options.append({
-                                                "action": "switch_route",
-                                                "label": f"Перемкнути маршрут на {alt_label} на час експерименту",
-                                                "primary": True,
-                                            })
-                                        options.extend([
-                                            {"action": "skip_model", "label": f"Пропустити модель {model_cfg['name']}"},
-                                            {"action": "abort_run", "label": "Зупинити довиконання серії"},
-                                        ])
-                                        decision = await wait_for_user_decision(
-                                            prompt_id=prompt_id,
-                                            prompt_type="model_route_failed",
-                                            title=f"Помилка моделі {model_cfg['name']}",
-                                            message=f"Помилка під час запиту {q['code']} ({cur_label}): {p_err}. Оберіть дію:",
-                                            options=options,
-                                            extra_context={"model_id": m_id, "failed_route": cur_route, "target_route": alt},
-                                            timeout_seconds=120.0,
-                                        )
-                                        act = (decision or {}).get("action")
-                                        if act == "wait_retry":
-                                            await asyncio.sleep(20.0)
-                                            continue
-                                        elif act == "switch_route" and alt:
-                                            set_session_route(m_id, alt)
-                                            continue
-                                        elif act == "abort_run":
-                                            early_ended = True
-                                            break
-                                        else:
-                                            disabled_models.add(m_id)
-                                            raise
-
-                                if early_ended or llm_out is None or parsed_contract is None:
-                                    break
-
-                                judge_res = None
-                                if active_judge and active_judge_model:
-                                    while active_judge:
-                                        try:
-                                            judge_res = await evaluate_with_rubric_judge(
-                                                user_query=q["user_query"],
-                                                context_fact=q["context_fact"],
-                                                reference_answer=q["reference_answer"],
-                                                expected_escalation=q["expected_escalation"],
-                                                generated_answer=parsed_contract["answer"],
-                                                evaluated_model_id=m_id,
-                                                judge_model_id=active_judge_model,
-                                                allow_self_judge=allow_self_judge,
-                                            )
-                                            break
-                                        except Exception as j_exc:
-                                            prompt_id = f"resume_judge_{int(time.time()*1000)}"
-                                            options = [
-                                                {"action": "wait_retry", "label": "Зачекати 20 сек і повторити оцінку суддею", "primary": True},
-                                                {"action": "heuristic_fallback", "label": "Продовжити без ШІ-судді"},
-                                            ]
-                                            decision = await wait_for_user_decision(
-                                                prompt_id=prompt_id,
-                                                prompt_type="judge_failed",
-                                                title="Збій моделі-судді",
-                                                message=f"Суддя {active_judge_model} повернув помилку: {j_exc}",
-                                                options=options,
-                                                extra_context={"current_judge": active_judge_model, "completed_items": completed},
-                                                timeout_seconds=90.0,
-                                            )
-                                            if (decision or {}).get("action") == "wait_retry":
-                                                await asyncio.sleep(20.0)
-                                                continue
-                                            active_judge = False
-                                            break
-
-                                metrics = evaluate_response_comprehensive(
-                                    generated_answer=parsed_contract["answer"],
-                                    reference_answer=q["reference_answer"],
-                                    required_keywords=q["required_keywords"],
-                                    expected_escalation=q["expected_escalation"],
-                                    prompt_code=p_code,
-                                    latency_ms=llm_out["latency_ms"],
-                                    context_fact=q["context_fact"],
-                                    user_query=q["user_query"],
-                                    judge_result=judge_res,
-                                    parsed_contract=parsed_contract,
-                                )
-
-                                _insert_evaluation_record(
-                                    cur=cur,
-                                    run_id=run_id,
-                                    query_id=q["id"],
-                                    query_code=q["code"],
-                                    category=q["category"],
-                                    prompt_pack=prompt_pack,
-                                    model_id=m_id,
-                                    repeat_index=rep,
-                                    llm_out=llm_out,
-                                    metrics=metrics,
-                                    source="batch",
-                                    judge_result=judge_res,
-                                    created_at=now_str,
-                                    context_info=ctx_info,
-                                )
-                                existing_cells.add(cell_key)
-                                completed += 1
-                                cur.execute("UPDATE experiment_runs SET completed_items = ? WHERE id = ?", (completed, run_id))
-                                conn.commit()
-
-                                log_event(
-                                    "ЕКСПЕРИМЕНТ [ДОВИКОНАНО]",
-                                    f"[{completed}/{total_items}] {q['code']} | {m_id} | {p_code} | {ctx_mode} -> FC={metrics['fact_coverage_pct']}%, Q_det={metrics['integral_efficiency_pct']}%",
-                                    level="EVAL",
-                                )
-                                await asyncio.sleep(1.2)
-                            except Exception as item_exc:
-                                log_event("ЕКСПЕРИМЕНТ [ПОМИЛКА]", f"Помилка довиконання {q['code']} ({m_id}, {p_code}): {item_exc}", level="ERROR")
-                                if _is_model_unusable_error(item_exc):
-                                    disabled_models.add(m_id)
-                                    if isinstance(item_exc, DailyQuotaExceededError):
-                                        quota_skipped[m_id] = str(item_exc)[:240]
-                                    log_event(
-                                        "ЕКСПЕРИМЕНТ [ПРОПУСК МОДЕЛІ]",
-                                        f"Модель {m_id} виключено з продовження через ліміт квоти або ключ. Решта моделей продовжують роботу.",
-                                        level="WARN",
-                                    )
-
-        final_status = "completed" if completed >= total_items else "incomplete"
-        if quota_skipped and final_status == "incomplete":
-            final_status = "paused_quota"
-        cur.execute(
-            "UPDATE experiment_runs SET completed_items = ?, status = ?, summary_json = ? WHERE id = ?",
-            (completed, final_status, json.dumps(_quota_fields(quota_skipped), ensure_ascii=False), run_id),
-        )
-        conn.commit()
-    finally:
-        clear_active_prompt()
-        conn.close()
+    conn.close()
+    state = await _run_series_cells(
+        run_id=run_id, selected_queries=selected_queries, modes=modes, prompt_codes=prompt_codes,
+        model_ids=model_ids, repeats=repeats, total_items=total_items, existing_cells=existing_cells,
+        eff_temp=eff_temp, eff_max_tokens=eff_max_tokens, eff_seed=eff_seed, eff_top_k=eff_top_k,
+        run_domain=run_domain, judge_model=str(active_judge_model or "") if active_judge else "",
+        allow_self_judge=bool(snapshot.get("allow_self_judge", False)),
+        now_str=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    _save_series_status(run_id, state, total_items)
+    completed = state["completed"]
+    quota_skipped = state["quota_skipped"]
 
     analytics = compute_run_analytics(run_id)
     conn2 = get_connection()

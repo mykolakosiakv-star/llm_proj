@@ -6,7 +6,7 @@ function buildJudgeSelectOptionsHtml(enabledModels, selectedValue, includeNoneOp
         return noneOpt + `<option value="" disabled>Немає увімкнених моделей (увімкніть у вкладці Провайдери та моделі)</option>`;
     }
     const opts = enabledModels.map(m => {
-        const viaOpenRouter = m.can_openrouter && m.route === 'openrouter';
+        const viaOpenRouter = Boolean(m.via_openrouter);
         const routeTag = viaOpenRouter ? 'OpenRouter' : 'Прямий API';
         const statusStr = m.status_label || 'Працює';
         const inCtx = formatTokenNum(m.context_in || m.input_limit);
@@ -184,7 +184,7 @@ function renderSingleSandboxResult(res) {
 
     const pctBars = [
         { label: 'Фактична повнота (Fact Coverage FC)', val: ev.fact_coverage_pct, color: 'bg-emerald-600' },
-        { label: 'Лексико-семантична схожість (SS = Cosine + ROUGE-L)', val: ev.semantic_similarity_pct, color: 'bg-blue-600' },
+        { label: 'Лексична близькість (SS = Cosine + ROUGE-L)', val: ev.semantic_similarity_pct, color: 'bg-blue-600' },
         { label: 'Дотримання формату за чек-листом (FMT)', val: ev.format_compliance_pct, color: 'bg-indigo-600' },
         { label: 'Бал рубрики якості (1-5)', val: ev.nist_composite_pct, color: 'bg-violet-600' },
     ];

@@ -100,9 +100,11 @@ def assess_h2(
 ) -> Dict[str, Any]:
     model = _spread(by_model, "model_name")
     prompt = _spread(by_prompt, "prompt_name_uk")
-    context = _spread(by_context_mode, "context_mode_name_uk")
+    # «без контексту» лишається базовою лінією: у вердикт іде лише різниця між знайденим і еталонним контекстом
+    with_context = [m for m in by_context_mode if m.get("context_mode") != "no_context"]
+    context = _spread(with_context, "context_mode_name_uk")
     if model is None or (prompt is None and context is None):
-        missing = "Потрібні щонайменше дві моделі та або дві стратегії промпту, або два режими контексту."
+        missing = "Потрібні щонайменше дві моделі та або дві стратегії промпту, або два режими контексту (еталонний і знайдений)."
         return _hypothesis("H2", "insufficient", "Порівняти вплив чинників поки неможливо.", [], missing=missing)
 
     evidence = [("Вибір моделі", f"розбіг {model['range']} п.п. ({model['best']} проти {model['worst']})")]

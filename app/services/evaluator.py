@@ -51,6 +51,10 @@ def _extract_json_candidates(raw_text: str) -> List[str]:
     return candidates
 
 
+# Парсер пишет "json"/"retry_json"; json_direct/json_retry остались в старых сериях
+JSON_PARSE_METHODS = ("json", "retry_json", "json_direct", "json_retry")
+
+
 def parse_contract_output(raw_text: str, is_retry: bool = False) -> Dict[str, Any]:
     """
     Витягує та валідує JSON-контракт {"answer": str, "escalate": bool, "reason": str}.
@@ -447,9 +451,15 @@ def evaluate_response_comprehensive(
     )
 
     escalation_regex = detect_escalation_from_answer(answer_text)
-    if parse_method in ("json_direct", "json_retry") and "escalate" in parsed_contract:
+    is_json_decision = parse_method in JSON_PARSE_METHODS and "escalate" in parsed_contract
+    contract_violated = parse_method == "fallback_regex"
+    if is_json_decision:
         primary_escalation = bool(parsed_contract["escalate"])
         escalation_method = parse_method
+    elif contract_violated:
+        # ответ без валидного JSON автоматически отдавать нельзя: решение берёт оператор
+        primary_escalation = True
+        escalation_method = "contract_violation"
     else:
         primary_escalation = escalation_regex
         escalation_method = "regex"
@@ -460,7 +470,7 @@ def evaluate_response_comprehensive(
     if judge_result and judge_result.get("evaluated"):
         escalation_judge = bool(judge_result.get("escalation_decision"))
         escalation_disagreement = (primary_escalation != escalation_judge)
-        requires_esc = primary_escalation if parse_method in ("json_direct", "json_retry") else escalation_judge
+        requires_esc = primary_escalation if (is_json_decision or contract_violated) else escalation_judge
         escalation_method = f"{escalation_method}+judge"
     else:
         requires_esc = primary_escalation

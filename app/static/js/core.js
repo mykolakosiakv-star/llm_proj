@@ -379,6 +379,50 @@ function getRunStatusBadgeHtml(run) {
     return badges.join(' ');
 }
 
+// Сколько замеров выполнила каждая модель серии: видно, кто прошёл все запросы, а кто нет
+function getModelProgressHtml(run) {
+    const names = new Map((APP_STATE.metadata?.models || []).map(m => [m.id, m.name]));
+    const quotaModels = new Set(run.summary?.quota_models || []);
+    return (run.model_progress || []).map(mp => {
+        const pct = mp.total > 0 ? Math.min(100, Math.round(mp.done / mp.total * 100)) : 0;
+        const finished = mp.total > 0 && mp.done >= mp.total;
+        const bar = finished ? 'bg-emerald-500' : (quotaModels.has(mp.model_id) ? 'bg-amber-500' : 'bg-blue-500');
+        const label = escapeHtml(names.get(mp.model_id) || mp.model_id);
+        return `<div class="flex items-center gap-2 text-[11px]">
+            <span class="w-44 truncate text-slate-700" title="${label}">${label}</span>
+            <div class="flex-1 h-1.5 rounded bg-slate-200 overflow-hidden"><div class="h-full ${bar}" style="width:${pct}%"></div></div>
+            <span class="w-24 text-right font-mono text-slate-600">${mp.done}/${mp.total}${finished ? ' готово' : ''}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderLogsRunStatus() {
+    const box = document.getElementById('logsRunStatus');
+    if (!box) return;
+    const runs = APP_STATE.runs || [];
+    const run = runs.find(r => r.status === 'running') || runs[0];
+    if (!run) {
+        box.classList.add('hidden');
+        return;
+    }
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="font-bold text-slate-900 text-sm">Серія #${run.id}: ${escapeHtml(run.title)}</span>
+        ${getRunStatusBadgeHtml(run)}
+    </div>
+    <div class="space-y-1">${getModelProgressHtml(run)}</div>`;
+}
+
+// Метка маршрута: пользователь должен видеть, что модель идёт через OpenRouter, а не напрямую
+function routeBadgeHtml(m) {
+    if (!m || !m.via_openrouter) return '';
+    return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300">OpenRouter</span>';
+}
+
+function routeTagText(m) {
+    return (m && m.via_openrouter) ? ' [OpenRouter]' : '';
+}
+
 const BLOCKING_STATUS_CODES = ['no_credit', 'invalid_key', 'no_key', 'model_missing'];
 
 // Модель, яка гарантовано не відповість (баланс, ключ, зникла з API); ліміти запитів сюди не входять, вони тимчасові

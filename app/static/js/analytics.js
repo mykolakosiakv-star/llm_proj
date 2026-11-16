@@ -712,7 +712,7 @@ function renderAnalyticsCharts(data) {
             datasets: [
                 { label: 'Якість відповіді, %', data: byPrompt.map(p => p.integral_efficiency_pct), backgroundColor: '#4f46e5' },
                 { label: 'Повнота фактів (%)', data: byPrompt.map(p => p.fact_coverage_pct), backgroundColor: '#10b981' },
-                { label: 'Надійність формату (%)', data: byPrompt.map(p => p.format_compliance_pct), backgroundColor: '#0ea5e9' },
+                { label: 'Відповідність формату (%)', data: byPrompt.map(p => p.format_compliance_pct), backgroundColor: '#0ea5e9' },
             ]
         },
         options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }

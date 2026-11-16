@@ -37,10 +37,12 @@ from app.services.logger import get_logs_and_status, log_event
 DISCOVERY_TTL_SECONDS = 6 * 3600
 STALE_STATUS_SECONDS = 24 * 3600
 PING_TIMEOUT_SECONDS = 20.0
+# Локальна модель при першому запиті завантажується в пам'ять, на слабкому ноутбуці це займає десятки секунд
+LOCAL_PING_TIMEOUT_SECONDS = 150.0
 PING_CONCURRENCY = 4
 MAX_OPENROUTER_FREE_MODELS = 35
 _ERR_MAX = 240
-_ROUTE_ELIGIBLE_PROVIDERS = {"groq", "openai", "anthropic"}
+_ROUTE_ELIGIBLE_PROVIDERS = {"groq", "openai", "anthropic", "gemini"}
 
 STATUS_LABELS_UK: Dict[str, str] = {
     "ok": "Працює",
@@ -636,6 +638,9 @@ def _match_openrouter_equivalent(provider: str, api_name: str, or_list: Dict[str
             f"meta-llama/{api_name.replace('-versatile', '-instruct').replace('-instant', '-instruct')}",
             f"meta-llama/{api_name.replace('-versatile', '-instruct').replace('-instant', '-instruct')}:free",
         ])
+    if provider == "gemini":
+        stable = api_name.removesuffix("-preview")
+        candidates.extend([f"google/{api_name}", f"google/{stable}"])
     if provider == "anthropic":
         short = api_name.removesuffix("-latest")
         candidates.extend([f"anthropic/{short}", f"anthropic/{api_name}"])
@@ -690,7 +695,7 @@ async def _ping_single_model(
                     f"{url_base}/chat/completions",
                     headers=headers,
                     json={"model": api_model_name, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
-                    timeout=5.0,
+                    timeout=LOCAL_PING_TIMEOUT_SECONDS,
                 )
             else:
                 resp = await client.post(
@@ -701,7 +706,7 @@ async def _ping_single_model(
                         "stream": False,
                         "options": {"num_predict": 1},
                     },
-                    timeout=5.0,
+                    timeout=LOCAL_PING_TIMEOUT_SECONDS,
                 )
         else:
             default_bases = {
@@ -882,6 +887,7 @@ def get_models_status_snapshot() -> Dict[str, Any]:
             "route": route_val,
             "preferred": preferred_val,
             "can_openrouter": can_or,
+            "via_openrouter": prov == "openrouter" or route_val == "openrouter",
             "base_url": r.get("base_url") or "",
             "api_key_env": r.get("api_key_env") or "",
             "class_uk": lim.get("class_uk") or ("Власна модель" if r.get("source") == "custom" else ""),
@@ -1110,11 +1116,6 @@ async def _discover_models(client: httpx.AsyncClient, keys: Dict[str, str], now_
     }
     lists: Dict[str, Dict[str, Any]] = {}
     listed_ok: set = set()
-    if not any(r["provider"] == "ollama" and r.get("enabled") for r in fetch_all_model_registry()):
-        # Локальний сервер опитується лише тоді, коли ввімкнено хоча б одну локальну модель, інакше журнал засмічують помилки з'єднання
-        listers.pop("ollama")
-        _remember_provider_report("ollama", {"status": "unchecked", "configured": bool(keys["ollama"]),
-                                             "error": "Не використовується: жодну локальну модель не ввімкнено."}, now_str)
     pids = list(listers)
     results = await asyncio.gather(*(listers[p](client, keys[p]) for p in pids), return_exceptions=True)
     for pid, res in zip(pids, results):
@@ -1223,7 +1224,8 @@ async def _check_models(
         try:
             async with semaphore:
                 await asyncio.wait_for(
-                    _check_one_model(client, r, keys, settings, lists, listed_ok, now_str), timeout=PING_TIMEOUT_SECONDS
+                    _check_one_model(client, r, keys, settings, lists, listed_ok, now_str),
+                    timeout=LOCAL_PING_TIMEOUT_SECONDS + 10 if r["provider"] == "ollama" else PING_TIMEOUT_SECONDS,
                 )
         except asyncio.TimeoutError:
             upsert_model_status(r["id"], "offline", None, None, "Час очікування відповіді вичерпано", now_str)
@@ -1244,6 +1246,7 @@ async def probe_all_providers(
     only_enabled: bool = True,
     force: bool = True,
     progress: Optional[Dict[str, Any]] = None,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Поновлює списки моделей (не частіше за TTL, якщо не force) і перевіряє увімкнені моделі окремо.
 
@@ -1266,6 +1269,8 @@ async def probe_all_providers(
         all_reg = fetch_all_model_registry()
         if model_key:
             targets = [r for r in all_reg if model_key in (r["id"], r["model_id"])]
+        elif provider:
+            targets = [r for r in all_reg if r["provider"] == provider]
         else:
             targets = [r for r in all_reg if r.get("enabled")] if only_enabled else all_reg
         if targets and model_key is None and _experiment_is_running():
@@ -1308,9 +1313,10 @@ def start_probe_task(
     model_key: Optional[str] = None,
     only_enabled: bool = True,
     force: bool = True,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Запускає перевірку у фоні. Якщо загальна перевірка вже триває, новий запит ставиться в чергу, а не губиться."""
-    params = {"model_key": model_key, "only_enabled": only_enabled, "force": force}
+    params = {"model_key": model_key, "only_enabled": only_enabled, "force": force, "provider": provider}
     if model_key is None and _PROBE_JOB["running"]:
         _PROBE_JOB["queued"] = params
         return {"started": False, "already_running": True, "queued": True, "snapshot": get_models_status_snapshot()}

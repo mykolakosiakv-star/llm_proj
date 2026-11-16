@@ -167,6 +167,7 @@ class RefreshStatusRequest(BaseModel):
     model_key: Optional[str] = Field(default=None, description="Опціональний ID моделі для точкової перевірки")
     only_enabled: bool = Field(default=True)
     force: bool = Field(default=True)
+    provider: Optional[str] = Field(default=None, description="Перевірити всі моделі одного провайдера, включно з вимкненими")
 
 
 class ResolvePromptRequest(BaseModel):

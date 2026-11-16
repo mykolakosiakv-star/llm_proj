@@ -497,7 +497,7 @@ OPENROUTER_FREE_RPM_DOCS: int = 20
 ROUTE_NATIVE = "native"
 ROUTE_DIRECT = "direct"
 ROUTE_OPENROUTER = "openrouter"
-_ROUTE_ELIGIBLE_PROVIDERS = {"groq", "openai", "anthropic"}
+_ROUTE_ELIGIBLE_PROVIDERS = {"groq", "openai", "anthropic", "gemini"}
 
 
 def load_models_pricing() -> Dict[str, Any]:

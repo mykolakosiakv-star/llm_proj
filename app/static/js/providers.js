@@ -207,6 +207,7 @@ function renderActiveModelsSummary() {
             <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-white border-slate-300 text-xs hover:border-slate-400 transition">
                 <span class="w-2 h-2 rounded-full ${dot}"></span>
                 <span class="font-semibold text-slate-800">${escapeHtml(m.name)}</span>
+                ${routeBadgeHtml(m)}
                 <span class="text-[10px] ${stDot} font-mono">(${escapeHtml(stLabel)})</span>
                 <button onclick="toggleSingleModelEnabled('${m.id}', false)" title="Вимкнути" class="text-slate-400 hover:text-rose-600 font-bold ml-1 transition">
                     &times;
@@ -327,8 +328,54 @@ function describeStatusSource(m) {
     if (!m.checked_at) return 'Не перевірено';
     const how = { ping: 'перевірено запитом', list: 'за списком провайдера', provider: 'за станом провайдера' }[m.check_kind] || '';
     const parts = [m.checked_ago_uk, how];
+    // Вимкнені моделі загальна перевірка не опитує, щоб не витрачати ліміти; кнопка «Перевірити всі» опитує і їх
+    if (!m.enabled && m.check_kind === 'ping') parts.push('вимкнена, у загальній перевірці не бере участі');
     if (m.is_stale) parts.push('застаріло, варто оновити');
     return parts.filter(Boolean).join(', ');
+}
+
+function isModelBeingChecked(m) {
+    const scope = APP_STATE.probingScope;
+    if (!scope) return false;
+    if (scope.type === 'all') return Boolean(m.enabled);
+    if (scope.type === 'provider') return m.provider === scope.id;
+    return m.id === scope.id || m.api_model_name === scope.id;
+}
+
+const MODEL_SORTS = {
+    availability: { label: 'Спочатку доступні', cmp: (a, b) => availabilityRank(a) - availabilityRank(b) },
+    enabled: { label: 'Спочатку увімкнені', cmp: (a, b) => Number(Boolean(b.enabled)) - Number(Boolean(a.enabled)) },
+    price: { label: 'Дешевші спочатку', cmp: (a, b) => priceRank(a) - priceRank(b) },
+    rpd: { label: 'Більший добовий ліміт', cmp: (a, b) => dailyLimitRank(b) - dailyLimitRank(a) },
+    context: { label: 'Більший контекст', cmp: (a, b) => (b.context_in || 0) - (a.context_in || 0) },
+    name: { label: 'За назвою', cmp: (a, b) => (a.name || '').localeCompare(b.name || '', 'uk') },
+};
+
+function availabilityRank(m) {
+    const order = { ok: 0, unchecked: 1, rate_limited: 2, daily_quota: 3, offline: 4 };
+    return order[m.status_code || 'unchecked'] ?? 5;
+}
+
+// Невідома ціна не дорівнює нулю, тому такі моделі йдуть у кінець
+function priceRank(m) {
+    const known = m.price_known && m.cost_per_1m_input_usd != null && m.cost_per_1m_output_usd != null;
+    return known ? m.cost_per_1m_input_usd + m.cost_per_1m_output_usd : Number.MAX_VALUE;
+}
+
+function dailyLimitRank(m) {
+    const rpd = (m.limits || {}).rpd ?? m.rpd;
+    return rpd == null ? -1 : Number(rpd);
+}
+
+function sortProviderModels(models) {
+    const sort = MODEL_SORTS[APP_STATE.modalSortKey || 'availability'];
+    // Стабільне сортування: за рівних значень порядок залишається за назвою
+    return [...models].sort((a, b) => sort.cmp(a, b) || (a.name || '').localeCompare(b.name || '', 'uk'));
+}
+
+function changeProviderModalSort(key) {
+    APP_STATE.modalSortKey = key;
+    if (APP_STATE.activeModalProviderId) renderProviderModalListContent(APP_STATE.activeModalProviderId);
 }
 
 function renderProviderModalListContent(providerId) {
@@ -340,13 +387,13 @@ function renderProviderModalListContent(providerId) {
     const p = (meta.providers || []).find(x => x.id === activeProvId) || { id: activeProvId, name: activeProvId, env_key: activeProvId };
     const allProviderModels = meta.models.filter(m => m.provider === activeProvId);
     const searchQuery = (document.getElementById('provModalSearchInput')?.value || '').trim().toLowerCase();
-    const pModels = searchQuery
+    const pModels = sortProviderModels(searchQuery
         ? allProviderModels.filter(m =>
             (m.name || '').toLowerCase().includes(searchQuery) ||
             (m.id || '').toLowerCase().includes(searchQuery) ||
             (m.api_model_name || '').toLowerCase().includes(searchQuery)
         )
-        : allProviderModels;
+        : allProviderModels);
 
     const probe = meta.probe || {};
     const pr = (probe.providers || {})[activeProvId] || {};
@@ -373,7 +420,18 @@ function renderProviderModalListContent(providerId) {
     if (subtitleEl) {
         const stLabel = pr.status_label || p.status_label || 'Не перевірено';
         const checkedAgo = pr.checked_ago_uk || p.checked_ago_uk || 'Не перевірено';
-        subtitleEl.textContent = `${p.env_key || ''} | Статус: ${stLabel} | ${checkedAgo}`;
+        const progress = APP_STATE.probingScope ? ` | ${describeProbeProgress(probe.probe || probe)}` : '';
+        subtitleEl.textContent = `${p.env_key || ''} | Статус: ${stLabel} | Список ${checkedAgo}${progress}`;
+    }
+    const sortSel = document.getElementById('provModalSortSelect');
+    if (sortSel && !sortSel.options.length) {
+        sortSel.innerHTML = Object.entries(MODEL_SORTS).map(([k, s]) => `<option value="${k}">${s.label}</option>`).join('');
+    }
+    if (sortSel) sortSel.value = APP_STATE.modalSortKey || 'availability';
+    const probeBtn = document.getElementById('provModalProbeAllBtn');
+    if (probeBtn) {
+        probeBtn.disabled = Boolean(APP_STATE.probingScope);
+        probeBtn.textContent = APP_STATE.probingScope ? 'Перевірка триває...' : 'Перевірити всі моделі';
     }
 
     const enabledCount = allProviderModels.filter(m => m.enabled).length;
@@ -381,7 +439,7 @@ function renderProviderModalListContent(providerId) {
 
     // Єдиний перемикач маршруту на рівні провайдера всередині модального вікна (лише коли OpenRouter налаштовано і провайдер має еквіваленти)
     const hasOpenRouterKey = Boolean(meta.settings?.key_status?.openrouter_configured);
-    const canRouteProvider = hasOpenRouterKey && ['groq', 'openai', 'anthropic'].includes(activeProvId) && allProviderModels.some(m => m.can_openrouter);
+    const canRouteProvider = hasOpenRouterKey && ['groq', 'openai', 'anthropic', 'gemini'].includes(activeProvId) && allProviderModels.some(m => m.can_openrouter);
     if (routeCtrlEl) {
         if (canRouteProvider) {
             const anyOpenRouter = allProviderModels.some(m => m.can_openrouter && m.route === 'openrouter');
@@ -409,8 +467,11 @@ function renderProviderModalListContent(providerId) {
     listEl.innerHTML = pModels.map(m => {
         const statusCode = m.status_code || 'unchecked';
         const statusLabel = m.status_label || 'Не перевірено';
-        const statusBadge = getStatusBadgeHtml(statusCode, statusLabel);
-        const checkedAgo = describeStatusSource(m);
+        const checking = isModelBeingChecked(m);
+        const statusBadge = checking
+            ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 animate-pulse">Оновлюється</span>'
+            : getStatusBadgeHtml(statusCode, statusLabel);
+        const checkedAgo = checking ? 'Оновлюється...' : describeStatusSource(m);
 
         const inCtx = formatTokenNum(m.context_in || m.input_limit);
         const priceKnown = Boolean(m.price_known) && m.cost_per_1m_input_usd != null && m.cost_per_1m_output_usd != null;
@@ -438,6 +499,7 @@ function renderProviderModalListContent(providerId) {
                         <div>
                             <div class="font-bold text-slate-900 text-xs flex flex-wrap items-center gap-1.5">
                                 <span>${escapeHtml(m.name)}</span>
+                                ${routeBadgeHtml(m)}
                                 <span class="text-[10px] font-mono font-normal text-slate-400">(${escapeHtml(m.api_model_name || m.id)})</span>
                                 ${newBadge}
                                 ${customBadge}
@@ -583,6 +645,7 @@ async function toggleProviderRoute(providerId, targetRoute) {
     // Перемикач реагує одразу; повна перевірка йде у фоні, бо може тривати хвилину
     affected.forEach(m => {
         m.route = targetRoute === 'openrouter' ? 'openrouter' : 'direct';
+        m.via_openrouter = m.provider === 'openrouter' || m.route === 'openrouter';
     });
     if (meta.settings) meta.settings.model_routes = routes;
     renderProviderModalListContent(providerId);

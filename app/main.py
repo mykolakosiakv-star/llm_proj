@@ -290,7 +290,7 @@ async def get_system_metadata():
         p_copy["status_label"] = p_snap.get("status_label", get_status_label_uk(p_copy["status"]))
         p_copy["checked_at"] = p_snap.get("checked_at")
         p_copy["checked_ago_uk"] = p_snap.get("checked_ago_uk", "Не перевірено")
-        p_copy["can_openrouter_route"] = p_id in ("groq", "openai", "anthropic") and bool(settings.get("openrouter_api_key"))
+        p_copy["can_openrouter_route"] = p_id in ("groq", "openai", "anthropic", "gemini") and bool(settings.get("openrouter_api_key"))
         providers_list.append(p_copy)
 
     custom_snap = snapshot_providers.get("custom")
@@ -431,7 +431,7 @@ async def api_get_methodology():
             {
                 "id": "FMT",
                 "symbol": "FMT",
-                "name_uk": "Надійність вихідного контракту (Format Reliability, %)",
+                "name_uk": "Відповідність формату вихідних даних (%)",
                 "formula_latex": "FMT = (passed_checks / 4) * 100%",
                 "range": "[0.0%; 100.0%]",
                 "description_uk": (
@@ -711,11 +711,20 @@ async def api_list_experiments():
         """
     )
     rows = [dict(r) for r in cur.fetchall()]
+    cur.execute("SELECT run_id, model_id, COUNT(*) AS n FROM evaluation_results GROUP BY run_id, model_id")
+    done_by_run: Dict[int, Dict[str, int]] = {}
+    for item in cur.fetchall():
+        done_by_run.setdefault(item["run_id"], {})[item["model_id"]] = item["n"]
     conn.close()
 
     filtered_rows = []
     for r in rows:
         r["models"] = json.loads(r.pop("models_json", "[]") or "[]")
+        per_model_total = round((r["total_items"] or 0) / max(len(r["models"]), 1))
+        done = done_by_run.get(r["id"], {})
+        r["model_progress"] = [
+            {"model_id": m, "done": done.get(m, 0), "total": per_model_total} for m in r["models"]
+        ]
         r["prompts"] = json.loads(r.pop("prompts_json", "[]") or "[]")
         r["categories"] = json.loads(r.pop("categories_json", "[]") or "[]")
         r["summary"] = json.loads(r.pop("summary_json", "{}") or "{}")
@@ -869,7 +878,7 @@ async def api_import_manual_validation_sample(
 
 
 @app.get("/api/experiments/{run_id}")
-async def api_get_experiment_analytics(
+def api_get_experiment_analytics(
     run_id: int,
     balanced_only: bool = Query(default=True),
     include_self_judged: bool = Query(default=False),
@@ -888,12 +897,12 @@ async def api_get_experiment_errors(run_id: int):
 
 
 @app.get("/api/hypotheses")
-async def api_hypotheses_overview():
+def api_hypotheses_overview():
     return compute_hypotheses_overview()
 
 
 @app.post("/api/analytics/flexible")
-async def api_get_flexible_analytics(payload: FlexibleAnalyticsRequest):
+def api_get_flexible_analytics(payload: FlexibleAnalyticsRequest):
     """Повертає зведену та порівняльну аналітику для однієї або кількох серій із фільтрацією за моделями, промптами та категоріями."""
     if not payload.run_ids:
         raise HTTPException(status_code=400, detail="Оберіть щонайменше одну серію експериментів.")
@@ -1170,6 +1179,7 @@ async def api_refresh_models_status(payload: Optional[RefreshStatusRequest] = Bo
         model_key=req.model_key,
         only_enabled=req.only_enabled,
         force=req.force,
+        provider=req.provider,
     )
 
 

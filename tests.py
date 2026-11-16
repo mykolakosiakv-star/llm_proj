@@ -593,6 +593,9 @@ def test_fastapi_endpoints_and_methodology_single_source_of_truth():
     assert r_exp.status_code == 200
     runs = r_exp.json()["runs"]
     assert all(r.get("execution_mode") != "sandbox" for r in runs)
+    for r in runs:
+        assert [p["model_id"] for p in r["model_progress"]] == r["models"]
+        assert sum(p["done"] for p in r["model_progress"]) <= r["actual_items_count"]
 
     if runs:
         run_id = runs[0]["id"]
@@ -1537,6 +1540,92 @@ def test_h2_compares_spread_of_prompts_and_context_with_models():
     assert assess_h2(models, strong_prompt, [], 10)["verdict"] == "insufficient"
 
 
+def test_series_runs_unattended_survives_failures_and_resumes():
+    from app.services import experiment_runner as er
+    from app.database import get_connection
+
+    def answer(model_id):
+        return {
+            "generated_answer": '{"answer": "Відповідь.", "escalate": false, "reason": "тест"}',
+            "input_tokens": 50, "output_tokens": 10, "thinking_tokens": 0, "latency_ms": 5.0,
+            "call_ms": 5.0, "wall_ms": 5.0, "cost_usd": 0.0001, "attempts": 1, "provider_used": "test",
+        }
+
+    async def flaky_llm(model_id, **kwargs):
+        if model_id == "gpt-oss-20b":
+            raise RuntimeError("Помилка GROQ (500): Internal error")
+        return answer(model_id)
+
+    async def good_llm(model_id, **kwargs):
+        return answer(model_id)
+
+    args = dict(
+        title="unattended", description="", model_ids=["gemini-3.1-flash-lite", "gpt-oss-20b"], prompt_codes=["P1"],
+        categories=["informational"], max_queries_per_category=6, domain="fintech", context_mode="gold_context",
+        judge_model_id="gemini-2.5-flash",
+    )
+    with patch.object(er, "execute_llm_request", new=flaky_llm), patch.object(er, "JUDGE_ATTEMPTS", 1), \
+         patch.object(er, "evaluate_with_rubric_judge", new=AsyncMock(side_effect=RuntimeError("judge down"))):
+        analytics = asyncio.run(er.execute_batch_experiment(**args))
+    run_id = analytics["run"]["id"]
+    conn = get_connection()
+    rows = conn.execute("SELECT model_id, COUNT(*) AS n FROM evaluation_results WHERE run_id = ? GROUP BY model_id", (run_id,)).fetchall()
+    run = conn.execute("SELECT status, total_items, summary_json FROM experiment_runs WHERE id = ?", (run_id,)).fetchone()
+    conn.close()
+    # збій судді не зупиняє заміри, а збійна модель зупиняється після кількох помилок поспіль і не блокує іншу
+    assert {r["model_id"]: r["n"] for r in rows} == {"gemini-3.1-flash-lite": run["total_items"] // 2}
+    assert run["status"] == "paused_quota" and "gpt-oss-20b" in json.loads(run["summary_json"])["quota_models"]
+
+    with patch.object(er, "execute_llm_request", new=good_llm), \
+         patch.object(er, "evaluate_with_rubric_judge", new=AsyncMock(return_value=None)):
+        asyncio.run(er.resume_batch_experiment(run_id))
+    conn = get_connection()
+    run = conn.execute("SELECT status, total_items, completed_items FROM experiment_runs WHERE id = ?", (run_id,)).fetchone()
+    conn.execute("DELETE FROM evaluation_results WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM experiment_runs WHERE id = ?", (run_id,))
+    conn.commit()
+    conn.close()
+    assert run["status"] == "completed" and run["completed_items"] == run["total_items"]
+
+
+def test_gemini_can_be_routed_via_openrouter_and_marked_in_metadata():
+    from app.services.model_discovery import _match_openrouter_equivalent
+    or_list = {"google/gemini-3.1-flash-lite": {}, "google/gemini-3-flash-preview": {}, "google/gemma-4-26b-a4b-it": {}}
+    assert _match_openrouter_equivalent("gemini", "gemini-3.1-flash-lite-preview", or_list) == "google/gemini-3.1-flash-lite"
+    assert _match_openrouter_equivalent("gemini", "gemini-3-flash-preview", or_list) == "google/gemini-3-flash-preview"
+    assert _match_openrouter_equivalent("gemini", "gemma-4-26b-a4b-it", or_list) == "google/gemma-4-26b-a4b-it"
+    assert _match_openrouter_equivalent("gemini", "gemini-unknown", or_list) is None
+    models = TestClient(app).get("/api/metadata").json()["models"]
+    assert all("via_openrouter" in m for m in models)
+    assert all(m["via_openrouter"] for m in models if m["provider"] == "openrouter")
+
+
+def test_h2_ignores_no_context_baseline():
+    from app.services.hypotheses import assess_h2
+    models = [_group("M1", 80), _group("M2", 70)]
+    modes = [
+        _group("без контексту", 40, context_mode="no_context"),
+        _group("еталонний", 76, context_mode="gold_context"),
+        _group("знайдений", 74, context_mode="retrieved_context"),
+    ]
+    # розбіг 36 п.п. був би за рахунок базової лінії; між еталонним і знайденим лише 2 п.п. при 10 між моделями
+    assert assess_h2(models, [], modes, 60)["verdict"] == "not_supported"
+    only_baseline = [_group("без контексту", 40, context_mode="no_context"), _group("знайдений", 74, context_mode="retrieved_context")]
+    assert assess_h2(models, [], only_baseline, 60)["verdict"] == "insufficient"
+
+
+def test_escalation_comes_from_json_field_and_contract_violation_goes_to_operator():
+    from app.services.evaluator import evaluate_response_comprehensive, parse_contract_output
+    kw = dict(reference_answer="Комісія 0%.", required_keywords=["0%"], prompt_code="P1", latency_ms=100.0)
+    ok = parse_contract_output('{"answer": "Комісія 0%.", "escalate": true, "reason": "ризик"}')
+    ev = evaluate_response_comprehensive(generated_answer="Комісія 0%.", expected_escalation=True, parsed_contract=ok, **kw)
+    assert ev["escalation_method"] == "json" and ev["requires_escalation"] is True and ev["escalation_correct"] is True
+    broken = parse_contract_output("Комісія 0%, питань немає.")
+    ev = evaluate_response_comprehensive(generated_answer="Комісія 0%, питань немає.", expected_escalation=False, parsed_contract=broken, **kw)
+    assert ev["escalation_method"] == "contract_violation" and ev["requires_escalation"] is True
+    assert ev["escalation_correct"] is False
+
+
 def _priced(name, q, cost, fn=0.0, known=True):
     return {"model_id": name, "model_name": name, "count": 40, "integral_efficiency_pct": q, "price_known": known,
             "cost_per_1m_usd": cost if known else None, "hallucination_rate_pct": 0.0, "escalation_matrix": {"fn_rate_pct": fn}}
@@ -1821,7 +1910,7 @@ def test_estimate_uses_the_same_selection_as_the_series():
     assert client.post("/api/experiments/estimate", json={**body, "categories": []}).json()["queries_count"] == 0
 
 
-def test_real_daily_limit_is_learned_from_gemini_error_and_ollama_is_skipped_when_unused():
+def test_real_daily_limit_is_learned_from_gemini_error():
     import httpx
     from app.services.model_discovery import extract_daily_quota_limit, _ping_single_model
     day = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota",
@@ -1840,40 +1929,30 @@ def test_real_daily_limit_is_learned_from_gemini_error_and_ollama_is_skipped_whe
     assert status == "daily_quota" and limits["rpd"] == 20
 
 
-def test_ollama_is_not_polled_unless_a_local_model_is_enabled():
+def test_pulled_ollama_models_are_discovered_even_when_no_local_model_is_enabled():
     from app.services import model_discovery as md
-    from app.database import get_connection
-    called = []
+    from app.database import get_connection, fetch_all_model_registry
+    info = {"display_name": "Ollama qwen-test:3b", "params_size": "3B", "family": "qwen2", "context_in": 32768, "context_out": 8192,
+            "price_in": 0.0, "price_out": 0.0, "price_source": "api", "rpm": 9999, "rpd": 999999}
 
     def fake(name):
         async def lister(client, key):
-            called.append(name)
-            return {"status": "ok", "models_total": 0}, {}
+            return {"status": "ok", "models_total": 1}, ({"qwen-test:3b": info} if name == "ollama" else {})
         return lister
 
     keys = {p: "" for p in ("gemini", "groq", "openai", "anthropic", "openrouter", "ollama")}
     patches = [patch.object(md, f"_list_{name}", new=fake(name)) for name in keys]
-    conn = get_connection()
-    conn.execute("UPDATE model_registry SET enabled = 0 WHERE provider = 'ollama'")
-    conn.commit()
-    conn.close()
     for p in patches:
         p.start()
     try:
-        asyncio.run(md._discover_models(None, keys, "2026-11-06 10:00:00"))
-        assert "ollama" not in called and "gemini" in called
-        conn = get_connection()
-        conn.execute("UPDATE model_registry SET enabled = 1 WHERE provider = 'ollama'")
-        conn.commit()
-        conn.close()
-        called.clear()
-        asyncio.run(md._discover_models(None, keys, "2026-11-06 10:00:00"))
-        assert "ollama" in called
+        asyncio.run(md._discover_models(None, keys, "2026-11-08 10:00:00"))
+        found = [r for r in fetch_all_model_registry() if r["provider"] == "ollama" and r["model_id"] == "qwen-test:3b"]
+        assert found and not found[0]["enabled"]
     finally:
         for p in patches:
             p.stop()
         conn = get_connection()
-        conn.execute("UPDATE model_registry SET enabled = 0 WHERE provider = 'ollama'")
+        conn.execute("DELETE FROM model_registry WHERE model_id = 'qwen-test:3b'")
         conn.commit()
         conn.close()
 
@@ -1959,12 +2038,20 @@ def test_estimate_shows_what_can_run_today_and_flags_blocked_models():
     upsert_model_status(model_key="gpt-4o-mini", status="unchecked", http_code=None, latency_ms=None, message="")
 
 
+def test_per_request_token_limit_is_parsed_from_groq_429():
+    from app.services.llm_runtime import _TOKEN_LIMIT_RE
+    text = "Request too large for model `qwen/x` on output tokens per minute (OTPM): Limit 1000, Requested 2000."
+    assert int(_TOKEN_LIMIT_RE.search(text).group(1)) == 1000
+    assert _TOKEN_LIMIT_RE.search("Rate limit reached: Limit 1000, Used 990") is None
+
+
 def test_series_skips_only_the_exhausted_model_and_keeps_quota_summary():
     from app.services.experiment_runner import _is_model_unusable_error, _quota_fields
-    from app.services.llm_runtime import DailyQuotaExceededError
+    from app.services.llm_runtime import DailyQuotaExceededError, ModelAccessError
     assert _is_model_unusable_error(DailyQuotaExceededError("limit"))
-    assert _is_model_unusable_error(RuntimeError("HTTP 401 Unauthorized"))
+    assert _is_model_unusable_error(ModelAccessError("HTTP 401 Unauthorized"))
     assert not _is_model_unusable_error(RuntimeError("timeout"))
+    assert not _is_model_unusable_error(RuntimeError("org_01m401x rate limit"))
     assert _quota_fields({}) == {}
     fields = _quota_fields({"gemini-3.1-flash-lite": "limit"})
     assert fields["quota_models"] == ["gemini-3.1-flash-lite"] and fields["quota_paused"] is True
@@ -1974,3 +2061,17 @@ def test_models_metadata_marks_free_tier_and_local_models():
     models = TestClient(app).get("/api/metadata").json()["models"]
     assert all("is_free_tier" in m for m in models)
     assert any(m["is_free_tier"] for m in models if m["provider"] == "gemini")
+
+
+def test_refresh_can_target_one_provider_including_disabled_models():
+    from app.services import model_discovery as md
+    seen = {}
+
+    def fake_start(**kwargs):
+        seen.update(kwargs)
+        return {"started": True}
+
+    with patch("app.main.start_probe_task", new=fake_start):
+        r = TestClient(app).post("/api/models/status/refresh", json={"provider": "groq", "only_enabled": False})
+    assert r.status_code == 200 and seen["provider"] == "groq" and seen["only_enabled"] is False
+    assert "provider" in md.start_probe_task.__code__.co_varnames
