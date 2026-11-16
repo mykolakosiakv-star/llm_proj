@@ -1,0 +1,2 @@
+Efron B. Bootstrap methods: another look at the jackknife. The Annals of Statistics. 1979. Vol. 7, No. 1. P. 1–26. DOI: 10.1214/aos/1176344552.
+Cliff N. Dominance statistics: ordinal analyses to answer ordinal questions. Psychological Bulletin. 1993. Vol. 114, No. 3. P. 494–509. DOI: 10.1037/0033-2909.114.3.494.
