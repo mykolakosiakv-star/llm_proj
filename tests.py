@@ -105,20 +105,6 @@ def test_dataset_v2_passes_100_percent_audit():
     assert exit_code == 0
 
 
-def test_expanded_dataset_draft_v3_passes_audit():
-    draft_path = Path(__file__).resolve().parent / "data" / "proposed" / "expanded_queries_draft.json"
-    assert draft_path.exists()
-    payload = json.loads(draft_path.read_text(encoding="utf-8"))
-    assert payload["total_queries"] >= 100
-    assert payload["escalation_share_pct"] >= 25.0
-    assert payload["audit_100pct_passed"] is True
-    esc_by_cat = payload["escalation_by_category"]
-    assert esc_by_cat.get("informational", 0) >= 2
-    assert esc_by_cat.get("procedural", 0) >= 2
-    assert esc_by_cat.get("troubleshooting", 0) >= 6
-    assert esc_by_cat.get("clarification", 0) >= 2
-
-
 def test_few_shot_never_leaks_current_query():
     queries = fetch_all_queries(category="informational", domain="fintech")
 

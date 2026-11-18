@@ -301,10 +301,7 @@ function selectWorkingExpModels() {
     onExpModelsChange();
 }
 
-// ============================================================================
 // СЕРІЙНІ ЕКСПЕРИМЕНТИ ТА ДЕТАЛІ ЗАМІРУ
-// ============================================================================
-
 async function startNewBatchExperiment() {
     const title = document.getElementById('expTitleInput').value.trim() || 'Серія експериментів';
     const domains = getSelectedExpDomains();
@@ -723,10 +720,7 @@ async function loadExperimentItemsLog() {
     }).join('');
 }
 
-// ============================================================================
 // МОДАЛЬНЕ ВІКНО: ПОВНИЙ ПАСПОРТ ОКРЕМОГО ЗАМІРУ ТА РУЧНА ОЦІНКА (1-5)
-// ============================================================================
-
 async function openEvaluationItemDetailModal(itemId) {
     const modal = document.getElementById('itemDetailModal');
     const body = document.getElementById('itemDetailModalBody');
@@ -902,26 +896,35 @@ async function openEvaluationItemDetailModal(itemId) {
                     </span>
                 </div>
 
+                ${(() => {
+                    const hs = ev.human_scores || {};
+                    const js = ev.judge_scores || {};
+                    if (!ev.manual_scored || !Object.keys(hs).length) return '';
+                    const names = [['relevance', 'Релевантність'], ['factuality', 'Факт. точність'], ['completeness', 'Повнота'], ['clarity', 'Зрозумілість'], ['policy_adherence', 'Політика']];
+                    const rows = names.map(([k, label]) => `<tr><td class="pr-3 text-slate-700">${label}</td><td class="px-3 font-mono">${js[k] ?? '-'}</td><td class="px-3 font-mono font-bold">${hs[k] ?? '-'}</td></tr>`).join('');
+                    return `<table class="text-xs"><thead><tr class="text-slate-500"><th class="text-left pr-3 font-semibold">Критерій</th><th class="px-3 font-semibold">Суддя</th><th class="px-3 font-semibold">Експерт</th></tr></thead><tbody>${rows}</tbody></table>
+                    <p class="text-[11px] text-slate-600">У полях нижче підставлено оцінки експерта.</p>`;
+                })()}
                 <div class="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">Релевантність (1-5):</label>
-                        <input id="manualScoreRel" type="number" min="1" max="5" step="0.5" value="${ev.relevance_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
+                        <input id="manualScoreRel" type="number" min="1" max="5" step="0.5" value="${ev.human_scores?.relevance ?? ev.relevance_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">Факт. точність (1-5):</label>
-                        <input id="manualScoreFact" type="number" min="1" max="5" step="0.5" value="${ev.factuality_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
+                        <input id="manualScoreFact" type="number" min="1" max="5" step="0.5" value="${ev.human_scores?.factuality ?? ev.factuality_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">Повнота (1-5):</label>
-                        <input id="manualScoreComp" type="number" min="1" max="5" step="0.5" value="${ev.completeness_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
+                        <input id="manualScoreComp" type="number" min="1" max="5" step="0.5" value="${ev.human_scores?.completeness ?? ev.completeness_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">Зрозумілість (1-5):</label>
-                        <input id="manualScoreClar" type="number" min="1" max="5" step="0.5" value="${ev.clarity_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
+                        <input id="manualScoreClar" type="number" min="1" max="5" step="0.5" value="${ev.human_scores?.clarity ?? ev.clarity_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">Політика/Формат (1-5):</label>
-                        <input id="manualScorePol" type="number" min="1" max="5" step="0.5" value="${ev.policy_adherence_score ?? ev.format_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
+                        <input id="manualScorePol" type="number" min="1" max="5" step="0.5" value="${ev.human_scores?.policy_adherence ?? ev.policy_adherence_score ?? ev.format_score}" class="w-full border border-slate-300 rounded px-2 py-1 bg-white font-bold">
                     </div>
                 </div>
 

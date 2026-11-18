@@ -1114,6 +1114,7 @@ def get_evaluation_item_detail(item_id: int) -> Optional[Dict[str, Any]]:
     hallucinated_items = json.loads(rec.get("hallucinated_items_json") or "[]")
     format_checks = json.loads(rec.get("format_checks_json") or "{}")
     judge_scores = json.loads(rec.get("judge_scores_json") or "{}")
+    human_scores = json.loads(rec.get("human_scores_json") or "{}")
     judge_rationale = json.loads(rec.get("judge_rationale_json") or "{}")
     retrieved_ids = json.loads(rec.get("retrieved_ids_json") or "[]")
 
@@ -1245,6 +1246,7 @@ def get_evaluation_item_detail(item_id: int) -> Optional[Dict[str, Any]]:
             "manual_notes": rec.get("manual_notes", ""),
             "judge_model": rec.get("judge_model", ""),
             "judge_scores": judge_scores,
+            "human_scores": human_scores,
             "judge_rationale": judge_rationale,
             "avg_nist_score_5": avg_5,
             "relevance_score": rec["relevance_score"],

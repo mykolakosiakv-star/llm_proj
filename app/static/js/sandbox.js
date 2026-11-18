@@ -78,9 +78,7 @@ function onSelectPresetQuery() {
     }
 }
 
-// ============================================================================
 // ВИКОНАННЯ ОДИНОЧНОГО ЗАПИТУ ДО LLM
-// ============================================================================
 
 async function runSandboxPipeline() {
     const userQuery = document.getElementById('sandboxUserQuery').value.trim();

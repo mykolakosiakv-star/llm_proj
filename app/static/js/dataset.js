@@ -1,6 +1,4 @@
-// ============================================================================
 // ДИНАМІЧНИЙ РЕНДЕРИНГ МЕТОДИКИ (/api/methodology)
-// ============================================================================
 
 function renderMethodologySection() {
     const container = document.getElementById('methodologyDynamicContainer');
@@ -45,9 +43,7 @@ function renderMethodologySection() {
     `;
 }
 
-// ============================================================================
 // БАЗА ЗАПИТІВ ТА ШАБЛОНИ ПРОМПТІВ (P1-P5)
-// ============================================================================
 
 function renderPromptCards() {
     document.getElementById('promptCardsGrid').innerHTML = APP_STATE.prompts.map(p => `
